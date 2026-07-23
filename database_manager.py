@@ -145,7 +145,7 @@ def init_db(db_name="database_cargo.db"):
     cursor.execute('''CREATE TABLE IF NOT EXISTS armada (
                         jenis_truk TEXT NOT NULL,
                         no_polisi TEXT PRIMARY KEY,
-                        nama_sopir TEXT NOT NULL,                        
+                        nama_sopir TEXT,
                         hp_sopir TEXT,
                         ket_armada TEXT,
                         foto_armada TEXT,                        

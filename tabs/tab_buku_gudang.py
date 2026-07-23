@@ -1,20 +1,24 @@
 # tabs/tab_buku_gudang.py
 from datetime import datetime
-from PyQt5.QtGui import QColor, QBrush, QFont
+from PyQt5.QtGui import QBrush
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QTableWidget,
                              QTableWidgetItem, QHeaderView, QAbstractItemView,
                              QMenu, QMessageBox, QLineEdit, QComboBox, QDateEdit,
-                             QWidgetAction, QVBoxLayout as VBox, QLabel, QApplication,
-                             QToolButton, QAction, QPushButton, QDialog, QRadioButton)
+                             QWidgetAction, QLabel, QApplication,
+                             QToolButton, QPushButton, QDialog, QRadioButton)
 from PyQt5.QtCore import Qt, QDate, QSettings, QEvent
 
 from config import CURRENT_SESSION, DATA_CLIENT
 
 import services.database_service as db_service
 
-from utils.typography import (MASTER_FONT, get_global_font_sizes)
-from utils.number_formatters import (format_ke_rupiah, rupiah_to_int)
-from utils.validators import (get_decimal_validator,get_integer_validator)
+from utils import zoom as zoom_helper
+from utils.typography import get_global_font_sizes
+from utils.number_formatters import (format_ke_rupiah, rupiah_to_int, format_angka_indonesia,
+                                     angka_indonesia_to_decimal)
+from utils.date_ind_format import format_tanggal_ke_ui
+from utils.table_helper import buat_tabel_item
+from utils.validators import (get_decimal_validator, get_integer_validator)
 from utils.widget_helpers import (paksa_kapital_lineedit)
 from themes.modules.buku_gudang import (
     BUKU_GUDANG_INLINE_EDITOR_STYLE,
@@ -61,11 +65,9 @@ class DialogPilihPenagih(QDialog):
 
         hbox_btn = QHBoxLayout()
         self.btn_lanjut = QPushButton("Lanjutkan ke Invoice")
-        self.btn_lanjut.setCursor(Qt.PointingHandCursor)
         self.btn_lanjut.setStyleSheet(dialog_styles["btn_lanjut"])
 
         self.btn_batal = QPushButton("Batal")
-        self.btn_batal.setCursor(Qt.PointingHandCursor)
         self.btn_batal.setStyleSheet(dialog_styles["btn_batal"])
 
         hbox_btn.addWidget(self.btn_lanjut)
@@ -130,7 +132,6 @@ class TabBukuGudang(QWidget):
         self.btn_tahun.setText(str(tahun_sekarang))
         self.btn_tahun.setPopupMode(QToolButton.InstantPopup)
         self.btn_tahun.setFixedWidth(120)
-        self.btn_tahun.setCursor(Qt.PointingHandCursor)
 
         self.menu_tahun = QMenu(self)
         self.setup_menu_tahun(tahun_sekarang)
@@ -150,16 +151,13 @@ class TabBukuGudang(QWidget):
 
         self.btn_buat_invoice = QPushButton("🧾 Buat Invoice")
         self.btn_buat_invoice.setStyleSheet(action_styles["btn_buat_invoice"])
-        self.btn_buat_invoice.setCursor(Qt.PointingHandCursor)
 
         self.btn_simpan_inv = QPushButton("✅ Simpan")
         self.btn_simpan_inv.setStyleSheet(action_styles["btn_simpan_inv"])
-        self.btn_simpan_inv.setCursor(Qt.PointingHandCursor)
         self.btn_simpan_inv.setVisible(False)
 
         self.btn_batal_inv = QPushButton("❌ Batal")
         self.btn_batal_inv.setStyleSheet(action_styles["btn_batal_inv"])
-        self.btn_batal_inv.setCursor(Qt.PointingHandCursor)
         self.btn_batal_inv.setVisible(False)
 
         hbox_header.addWidget(self.btn_buat_invoice)
@@ -386,35 +384,70 @@ class TabBukuGudang(QWidget):
         if isinstance(obj, QLineEdit):
             is_numeric = getattr(obj, 'is_numeric_col', False)
             if event.type() == QEvent.FocusIn:
-                if is_numeric and obj.text().strip() == "-": obj.setText("")
+                if is_numeric and obj.text().strip() == "-":
+                    obj.setText("")
             elif event.type() == QEvent.FocusOut:
-                if is_numeric and obj.text().strip() == "": obj.setText("-")
+                if is_numeric and obj.text().strip() == "":
+                    obj.setText("-")
         return super().eventFilter(obj, event)
 
     def sesuaikan_tema_lokal(self):
         win = self.window()
         is_dark = win.current_theme == "dark" if win and hasattr(win, 'current_theme') else (
                 "#25282e" in QApplication.instance().styleSheet().lower())
-        settings = QSettings("AplikasiEkspedisi", "PengaturanUI")
-        z = int(settings.value(f"zoom_{self.__class__.__name__}", 0))
 
-        font_sizes = get_global_font_sizes(z)
+        z = zoom_helper.dapatkan_zoom_level(self.__class__.__name__)
 
-        styles = get_buku_gudang_styles(
+        font_statis = get_global_font_sizes(0)
+        font_dinamis = get_global_font_sizes(z)
+
+        styles_statis = get_buku_gudang_styles(
             is_dark=is_dark,
-            sz_base=font_sizes["sz_base"],
-            sz_input=font_sizes["sz_input"],
-            sz_title=font_sizes["sz_title"],
+            sz_base=font_statis["sz_base"],
+            sz_input=font_statis["sz_input"],
+            sz_title=font_statis["sz_title"],
         )
 
-        self.lbl_judul.setStyleSheet(styles["lbl_judul"])
-        self.btn_tahun.setStyleSheet(styles["btn_tahun"])
-        self.txt_cari.setStyleSheet(styles["txt_cari"])
+        styles_dinamis = get_buku_gudang_styles(
+            is_dark=is_dark,
+            sz_base=font_dinamis["sz_base"],
+            sz_input=font_dinamis["sz_input"],
+            sz_title=font_dinamis["sz_title"],
+        )
+
+        # 1. Elemen Atas (Statis)
+        self.lbl_judul.setStyleSheet(styles_statis["lbl_judul"])
+        self.btn_tahun.setStyleSheet(styles_statis["btn_tahun"])
+        self.txt_cari.setStyleSheet(styles_statis["txt_cari"])
 
         for widget in self.tabs_list:
             if hasattr(widget, 'tabel'):
-                widget.tabel.setStyleSheet(styles["tabel"])
+                # 2. Terapkan Style Dinamis khusus Buku Gudang
+                widget.tabel.setStyleSheet(styles_dinamis["tabel"])
 
+                # 3. Paksa update font secara eksplisit ke dalam objek tabel & header
+                font = widget.tabel.font()
+                font.setPointSize(font_dinamis["sz_base"])
+                widget.tabel.setFont(font)
+
+                header_font = widget.tabel.horizontalHeader().font()
+                header_font.setPointSize(font_dinamis["sz_base"])
+                widget.tabel.horizontalHeader().setFont(header_font)
+                widget.tabel.verticalHeader().setFont(header_font)
+
+                # 4. Sesuaikan tinggi baris secara manual
+                faktor = max(0.68, min(1.0 + (z * 0.08), 1.80))
+                tinggi_baris = max(24, int(32 * faktor))
+                widget.tabel.verticalHeader().setDefaultSectionSize(tinggi_baris)
+
+                # 5. KUNCI: Blokir signal agar tabel tidak melompat
+                widget.tabel.horizontalHeader().blockSignals(True)
+
+                # 6. HANYA panggil fungsi skalakan kolom (JANGAN gunakan terapkan_zoom_tabel)
+                zoom_helper._skalakan_kolom_tableview(widget.tabel, z)
+
+                # 7. Buka kembali signal
+                widget.tabel.horizontalHeader().blockSignals(False)
 
     def setup_menu_tahun(self, tahun_sekarang):
         self.menu_tahun.clear()
@@ -469,7 +502,7 @@ class TabBukuGudang(QWidget):
         menu = QMenu()
         menu.setStyleSheet(get_buku_gudang_menu_style())
         container = QWidget()
-        vbox = VBox(container)
+        vbox = QVBoxLayout(container)
         vbox.addWidget(QLabel(f"Filter {header_text}:"))
 
         if editor_type == "date":
@@ -571,8 +604,15 @@ class TabBukuGudang(QWidget):
                 line_edit = QLineEdit()
                 is_numeric = col in [self.KOL_KOLI, self.KOL_BERAT, self.KOL_CBM, self.KOL_ONGKIR]
                 line_edit.is_numeric_col = is_numeric
-                line_edit.setText("" if is_numeric and teks_asal.strip() == "-" else teks_asal.strip().replace(".",
-                                                                                                               "") if is_numeric else teks_asal.strip())
+
+                if is_numeric:
+                    if teks_asal.strip() == "-":
+                        line_edit.setText("")
+                    else:
+                        line_edit.setText(teks_asal.strip().replace(".", ""))
+                else:
+                    line_edit.setText(teks_asal.strip())
+
                 line_edit.setStyleSheet(BUKU_GUDANG_INLINE_EDITOR_STYLE)
 
                 if col == self.KOL_KOLI:
@@ -593,10 +633,7 @@ class TabBukuGudang(QWidget):
                         )
                     )
 
-                elif col in [
-                    self.KOL_BERAT,
-                    self.KOL_CBM,
-                ]:
+                elif col in [self.KOL_BERAT, self.KOL_CBM]:
                     line_edit.setValidator(
                         get_decimal_validator(
                             parent=line_edit,
@@ -616,8 +653,11 @@ class TabBukuGudang(QWidget):
 
     def load_data(self, tab_widget):
         tabel, wilayah, filters = tab_widget.tabel, tab_widget.wilayah, getattr(tab_widget, 'filter_data', {})
-        tabel.blockSignals(True);
+        if not hasattr(tabel, "_zoom_base_column_widths"):
+            tabel._zoom_base_column_widths = {i: tabel.columnWidth(i) for i in range(tabel.columnCount())}
+        tabel.blockSignals(True)
         tabel.setRowCount(0)
+
         is_dark = self.window().current_theme == "dark" if self.window() and hasattr(self.window(),
                                                                                      'current_theme') else False
 
@@ -625,154 +665,88 @@ class TabBukuGudang(QWidget):
             rows = db_service.ambil_data_buku_gudang(CURRENT_SESSION.get('kode_cabang', 'PUSAT'), wilayah,
                                                      self.btn_tahun.text(), filters)
             for row in rows:
-                pos = tabel.rowCount();
+                pos = tabel.rowCount()
                 tabel.insertRow(pos)
-                item_no = QTableWidgetItem(str(pos + 1))
-                item_no.setTextAlignment(Qt.AlignCenter);
-                item_no.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-                tabel.setItem(pos, self.KOL_NO, item_no)
 
                 status = str(row[3]).strip().upper()
-
                 bg, fg = get_buku_gudang_status_colors(
                     is_dark=is_dark,
                     status=status,
                     is_alternate_row=(pos % 2 != 0),
                 )
 
-                if bg: item_no.setBackground(QBrush(bg)); item_no.setForeground(QBrush(fg))
+                item_no = buat_tabel_item(
+                    text=str(pos + 1),
+                    editable=False,
+                    alignment=Qt.AlignCenter
+                )
+
+                if bg:
+                    item_no.setBackground(QBrush(bg))
+                    item_no.setForeground(QBrush(fg))
+
+                tabel.setItem(pos, self.KOL_NO, item_no)
 
                 for col_idx, data in enumerate(row):
                     display = str(data).upper() if data is not None else ""
                     col_tabel = col_idx + 1
+
                     if col_tabel == self.KOL_KOTA_TUJUAN:
-                        display = (
-                            display
-                            .replace(
-                                f"{wilayah} - ".upper(),
-                                "",
-                            )
-                            .replace(
-                                wilayah.upper(),
-                                "",
-                            )
-                            .strip(" -")
-                        )
+                        display = display.replace(f"{wilayah} - ".upper(), "").replace(wilayah.upper(), "").strip(" -")
 
-                    elif (
-                            col_tabel
-                            in [
-                                self.KOL_MASUK,
-                                self.KOL_KELUAR,
-                            ]
-                            and data
-                            and "-" in display
-                    ):
-                        bagian_tanggal = display.split("-")
-
-                        if len(bagian_tanggal) >= 3:
-                            display = (
-                                f"{bagian_tanggal[2]}/"
-                                f"{bagian_tanggal[1]}/"
-                                f"{bagian_tanggal[0]}"
-                            )
+                    elif col_tabel in [self.KOL_MASUK, self.KOL_KELUAR] and data and "-" in display:
+                        display = format_tanggal_ke_ui(data)
 
                     elif col_tabel == self.KOL_KOLI:
-                        # KOLI adalah teks bebas.
-                        # Contoh: 2 DUS, 4 PALET, 3 KARUNG.
-                        if (
-                                data is not None
-                                and str(data).strip()
-                                and str(data).strip() != "0"
-                        ):
+                        if data is not None and str(data).strip() and str(data).strip() != "0":
                             display = str(data).strip().upper()
                         else:
                             display = "-"
 
                     elif col_tabel == self.KOL_ONGKIR:
-                        if (
-                                data is not None
-                                and str(data).strip()
-                                not in [
-                            "",
-                            "0",
-                            "0.0",
-                            "None",
-                        ]
-                        ):
+                        if data is not None and str(data).strip() not in ["", "0", "0.0", "None"]:
                             display = format_ke_rupiah(data)
                         else:
                             display = "-"
 
-                    elif col_tabel in [
-                        self.KOL_BERAT,
-                        self.KOL_CBM,
-                    ]:
-                        if (
-                                data is not None
-                                and str(data).strip()
-                                not in [
-                            "",
-                            "0",
-                            "0.0",
-                            "None",
-                        ]
-                        ):
-                            try:
-                                angka = float(
-                                    str(data)
-                                    .replace(".", "")
-                                    .replace(",", ".")
-                                )
+                    elif col_tabel in [self.KOL_BERAT, self.KOL_CBM]:
+                        display = format_angka_indonesia(data, kosong_jika_nol=True, nilai_kosong="-")
 
-                                if angka.is_integer():
-                                    display = (
-                                        f"{int(angka):,}"
-                                        .replace(",", ".")
-                                    )
-                                else:
-                                    display = (
-                                        f"{angka:,.2f}"
-                                        .replace(",", "X")
-                                        .replace(".", ",")
-                                        .replace("X", ".")
-                                        .replace(",00", "")
-                                    )
+                    alignment_value = Qt.AlignLeft | Qt.AlignVCenter
+                    if col_tabel in [self.KOL_KOLI, self.KOL_BERAT, self.KOL_CBM, self.KOL_ONGKIR]:
+                        # Angka / Nilai (Koli, Berat, CBM, Ongkir) -> Rata Kanan
+                        alignment_value = Qt.AlignRight | Qt.AlignVCenter
+                    elif col_tabel in [self.KOL_MASUK, self.KOL_KELUAR]:
+                        # Tanggal -> Rata Tengah
+                        alignment_value = Qt.AlignCenter | Qt.AlignVCenter
+                    else:
+                        # Teks / Identitas (Resi, Pengirim, Penerima, Barang, dll) -> Rata Kiri
+                        alignment_value = Qt.AlignLeft | Qt.AlignVCenter
 
-                            except (
-                                    TypeError,
-                                    ValueError,
-                            ):
-                                display = str(data).strip()
-                        else:
-                            display = "-"
+                    item = buat_tabel_item(
+                        text=display,
+                        editable=False,
+                        alignment=alignment_value
+                    )
 
-                    item = QTableWidgetItem(display)
-                    if col_tabel in [
-                        self.KOL_BERAT,
-                        self.KOL_CBM,
-                        self.KOL_ONGKIR,
-                    ]:
-                        item.setTextAlignment(
-                            Qt.AlignRight
-                            | Qt.AlignVCenter
-                        )
+                    if bg:
+                        item.setBackground(QBrush(bg))
+                        item.setForeground(QBrush(fg))
 
-                    elif col_tabel == self.KOL_KOLI:
-                        item.setTextAlignment(
-                            Qt.AlignLeft
-                            | Qt.AlignVCenter
-                        )
-                    if bg: item.setBackground(QBrush(bg)); item.setForeground(QBrush(fg))
-                    item.setFlags(item.flags() ^ Qt.ItemIsEditable)
                     tabel.setItem(pos, col_tabel, item)
-            if tabel.rowCount() > 0: tabel.scrollToBottom()
+
+            if tabel.rowCount() > 0:
+                tabel.scrollToBottom()
+
         except Exception as e:
-            print(f"Error load data: {e}")
+            QMessageBox.critical(self, "Error Database", f"Gagal memuat data buku gudang:\n{e}")
+
         tabel.blockSignals(False)
 
     def eksekusi_simpan_baris_ke_db(self, tabel, row):
-        if self.row_sedang_diedit == -1: return
+        if self.row_sedang_diedit == -1:
+            return
+
         no_resi = tabel.item(row, self.KOL_RESI).text()
 
         kolom_db = {
@@ -788,71 +762,80 @@ class TabBukuGudang(QWidget):
                 w = tabel.cellWidget(row, col)
                 val = w.currentText().strip().upper() if isinstance(w,
                                                                     QComboBox) else w.text().strip().upper() if w else ""
-                if (
-                        col
-                        in [
-                    self.KOL_BERAT,
-                    self.KOL_CBM,
-                    self.KOL_ONGKIR,
-                ]
-                        and val in [
-                    "",
-                    "-",
-                ]
-                ):
-                    val = "0"
 
-                elif (
-                        col == self.KOL_KOLI
-                        and val == "-"
-                ):
+                if col in [self.KOL_BERAT, self.KOL_CBM, self.KOL_ONGKIR] and val in ["", "-"]:
+                    val = "0"
+                elif col == self.KOL_KOLI and val == "-":
                     val = ""
 
                 if col == self.KOL_ONGKIR:
                     val = str(rupiah_to_int(val))
                 elif col in [self.KOL_BERAT, self.KOL_CBM]:
-                    val = val.replace(".", "").replace(",", ".")
+                    val = str(angka_indonesia_to_decimal(val))
                 elif col == self.KOL_KOTA_TUJUAN:
                     wilayah = tabel.parentWidget().wilayah.upper()
-                    if wilayah not in val: val = f"{wilayah} - {val}"
+                    if wilayah not in val:
+                        val = f"{wilayah} - {val}"
+
                 updates[field] = val
 
             payload = {'nama_barang': updates['nama_barang'], 'koli': updates['koli'], 'berat': updates['berat'],
                        'cbm': updates['cbm']}
             db_service.update_baris_buku_gudang(no_resi, CURRENT_SESSION.get('kode_cabang', 'PUSAT'), updates, payload)
+
             self.refresh_session_ui()
             QMessageBox.information(self, "Sukses", f"Data Resi {no_resi} berhasil disimpan!")
+
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Gagal: {e}");
+            QMessageBox.critical(self, "Error", f"Gagal: {e}")
             self.refresh_session_ui()
 
     def tandai_selesai_massal(self, tabel):
         rows = set(item.row() for item in tabel.selectedItems())
-        resi_list = [tabel.item(r, self.KOL_RESI).text() for r in rows]
+        resi_list = [tabel.item(r, self.KOL_RESI).text() for r in rows if not tabel.isRowHidden(r)]
+
+        if not resi_list:
+            QMessageBox.warning(self, "Peringatan",
+                                "Tidak ada resi valid yang dipilih (atau resi sedang disembunyikan oleh filter).")
+            return
+
         if QMessageBox.question(self, "Konfirmasi", f"Tandai {len(resi_list)} resi menjadi SELESAI?",
                                 QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             try:
-                db_service.tandai_resi_selesai_massal(resi_list, CURRENT_SESSION.get('kode_cabang',
-                                                                                     'PUSAT'));
+                db_service.tandai_resi_selesai_massal(resi_list, CURRENT_SESSION.get('kode_cabang', 'PUSAT'))
                 self.refresh_session_ui()
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Gagal: {e}")
 
     def refresh_session_ui(self):
         self.row_sedang_diedit = -1
-        if self.tabs_wilayah.currentWidget(): self.load_data(
-            self.tabs_wilayah.currentWidget()); self.filter_pencarian_tabel()
+        if self.tabs_wilayah.currentWidget():
+            self.load_data(self.tabs_wilayah.currentWidget())
 
+        self.filter_pencarian_tabel()
 
     def simpan_lebar_kolom(self, tabel):
-        QSettings("EkspedisiApp", "BukuGudang").setValue("lebar_kolom_gudang_v2",
-                                                         [tabel.columnWidth(i) for i in range(tabel.columnCount())])
+        z = zoom_helper.dapatkan_zoom_level(self.__class__.__name__)
+        faktor = max(0.68, min(1.0 + (z * 0.08), 1.80))
+
+        lebar_dasar = []
+        for i in range(tabel.columnCount()):
+            # Bagi lebar saat ini dengan faktor zoom untuk mendapatkan ukuran aslinya
+            lebar_asli = int(tabel.columnWidth(i) / faktor)
+            lebar_dasar.append(lebar_asli)
+
+            # Perbarui cache zoom di memori agar saat di-zoom lagi tidak me-reset manual resizenya
+            if hasattr(tabel, "_zoom_base_column_widths"):
+                tabel._zoom_base_column_widths[i] = lebar_asli
+
+        QSettings("EkspedisiApp", "BukuGudang").setValue("lebar_kolom_gudang_v2", lebar_dasar)
 
     def load_lebar_kolom(self, tabel):
         w = QSettings("EkspedisiApp", "BukuGudang").value("lebar_kolom_gudang_v2")
         if w:
             tabel.horizontalHeader().blockSignals(True)
-            for i, width in enumerate(w): tabel.setColumnWidth(i, int(width))
+            for i, width in enumerate(w):
+                tabel.setColumnWidth(i, int(width))
             tabel.horizontalHeader().blockSignals(False)
         else:
             tabel.setColumnWidth(self.KOL_NO, 45)

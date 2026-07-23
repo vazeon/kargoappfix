@@ -1,5 +1,4 @@
 # tabs/tab_setting.py
-import sqlite3
 import json
 import os
 import re
@@ -12,6 +11,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QSettings, QEvent
 from PyQt5.QtGui import QFontDatabase
 from config import CURRENT_SESSION, DATA_CLIENT
+
+import services.database_service as db_service
 
 from themes.modules.setting import get_setting_styles
 
@@ -42,7 +43,6 @@ class TabSettingSistem(QWidget):
         sidebar_layout.addWidget(self.lbl_menu)
 
         self.sidebar_list = QListWidget()
-        self.sidebar_list.setCursor(Qt.PointingHandCursor)
         self.sidebar_list.setFocusPolicy(Qt.NoFocus)
 
         menus = [
@@ -90,7 +90,6 @@ class TabSettingSistem(QWidget):
 
         # ── 3. TOMBOL SIMPAN GLOBAL (Selalu Terlihat di Bawah) ──
         self.btn_simpan_all = QPushButton("💾 SIMPAN PENGATURAN")
-        self.btn_simpan_all.setCursor(Qt.PointingHandCursor)
         self.btn_simpan_all.setFixedHeight(48)
         self.btn_simpan_all.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.btn_simpan_all.clicked.connect(self.simpan_pengaturan)
@@ -210,7 +209,6 @@ class TabSettingSistem(QWidget):
         self.txt_in_nama_np.textChanged.connect(lambda: self.paksa_kapital_lineedit(self.txt_in_nama_np))
 
         self.btn_add_np = QPushButton("+")
-        self.btn_add_np.setCursor(Qt.PointingHandCursor)
         self.btn_add_np.setFixedWidth(40)
         self.btn_add_np.clicked.connect(self.tambah_rek_np)
 
@@ -250,7 +248,6 @@ class TabSettingSistem(QWidget):
         self.txt_in_nama_p.textChanged.connect(lambda: self.paksa_kapital_lineedit(self.txt_in_nama_p))
 
         self.btn_add_p = QPushButton("+")
-        self.btn_add_p.setCursor(Qt.PointingHandCursor)
         self.btn_add_p.setFixedWidth(40)
         self.btn_add_p.clicked.connect(self.tambah_rek_p)
 
@@ -321,7 +318,6 @@ class TabSettingSistem(QWidget):
         self._init_form(form_font)
 
         self.combo_font = QComboBox()
-        self.combo_font.setCursor(Qt.PointingHandCursor)
         self.combo_font.setFixedHeight(36)
 
         font_kandidat = [
@@ -492,7 +488,6 @@ class TabSettingSistem(QWidget):
         table.setItem(row, 2, QTableWidgetItem(nama))
 
         btn_del = QPushButton("-")
-        btn_del.setCursor(Qt.PointingHandCursor)
 
         if CURRENT_SESSION.get('role', 'ADMIN') != "SUPER_ADMIN":
             btn_del.setEnabled(False)
@@ -710,14 +705,9 @@ class TabSettingSistem(QWidget):
         for rek in rek_p:
             parse_dan_tambah_ke_tabel(rek, self.table_p)
 
+        # 💡 DIBERSIHKAN: Menggunakan db_service untuk membaca data cabang
         try:
-            conn = sqlite3.connect(CURRENT_SESSION['db_name'])
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT kode_cabang, nama_cabang, resi_prefix, start_seq_json, aturan_prefix FROM data_cabang LIMIT 10")
-            rows = cursor.fetchall()
-            conn.close()
-
+            rows = db_service.ambil_semua_data_cabang(limit=10)
             for idx, r in enumerate(rows):
                 for col, val in enumerate(r):
                     self.table_cabang.setItem(idx, col, QTableWidgetItem(str(val)))
@@ -763,58 +753,59 @@ class TabSettingSistem(QWidget):
         list_np = [x for x in list_np_raw if x]
         list_p = [x for x in list_p_raw if x]
 
+        # 💡 SUSUN DATA SETTING
+        settings_to_save = [
+            ('nama_perusahaan', nama_pt),
+            ('pt_nama', nama_pt),
+            ('logo_text_html', logo_input),
+            ('template_no_resi', template),
+            ('kode_akhiran_pajak', suffix),
+            ('provinsi_tujuan', sub_tabs_json),
+            ('rekening_nonpajak', json.dumps(list_np)),
+            ('rekening_pajak', json.dumps(list_p)),
+        ]
+
+        # 💡 SUSUN DATA CABANG
+        branches_to_save = []
+        for row in range(self.table_cabang.rowCount()):
+            item_kode = self.table_cabang.item(row, 0)
+            if not (item_kode and item_kode.text().strip()):
+                continue
+
+            item_nama = self.table_cabang.item(row, 1)
+            item_prefix = self.table_cabang.item(row, 2)
+            item_seq = self.table_cabang.item(row, 3)
+            item_route = self.table_cabang.item(row, 4)
+
+            kode_c = item_kode.text().strip().upper()
+            nama_c = item_nama.text().strip().upper() if item_nama else f"CABANG {kode_c}"
+            pref_c = item_prefix.text().strip().upper() if item_prefix else "INV"
+
+            seq_json_str = (item_seq.text().strip() if item_seq and item_seq.text().strip() else '{"DEFAULT": 0}')
+            route_json_str = (item_route.text().strip() if item_route and item_route.text().strip() else '{"DEFAULT": "INV"}')
+
+            try:
+                json.loads(seq_json_str)
+                json.loads(route_json_str)
+            except json.JSONDecodeError:
+                QMessageBox.critical(self, "Error Format JSON",
+                                     f"Baris ke-{row + 1} ({kode_c}) gagal disimpan!\nFormat JSON tidak valid.")
+                return
+
+            branches_to_save.append({
+                'kode_cabang': kode_c,
+                'nama_cabang': nama_c,
+                'resi_prefix': pref_c,
+                'start_seq_json': seq_json_str,
+                'aturan_prefix': route_json_str
+            })
+
+        # 💡 EKSEKUSI SIMPAN VIA SERVICE
         try:
-            conn = sqlite3.connect(CURRENT_SESSION['db_name'])
-            cursor = conn.cursor()
-
-            # 🌟 PROSES SIMPAN: Bersih, terpusat, dan seragam
-            settings_to_save = [
-                ('nama_perusahaan', nama_pt),
-                ('pt_nama', nama_pt),
-                ('logo_text_html', logo_input),  # Simpan murni teks polos (Satu warna)
-                ('template_no_resi', template),
-                ('kode_akhiran_pajak', suffix),
-                ('provinsi_tujuan', sub_tabs_json),
-                ('rekening_nonpajak', json.dumps(list_np)),
-                ('rekening_pajak', json.dumps(list_p)),
-            ]
-            for kunci, nilai in settings_to_save:
-                cursor.execute("INSERT OR REPLACE INTO pengaturan_sistem (kunci, nilai) VALUES (?, ?)", (kunci, nilai))
-
-            for row in range(self.table_cabang.rowCount()):
-                item_kode = self.table_cabang.item(row, 0)
-                if not (item_kode and item_kode.text().strip()): continue
-
-                item_nama = self.table_cabang.item(row, 1)
-                item_prefix = self.table_cabang.item(row, 2)
-                item_seq = self.table_cabang.item(row, 3)
-                item_route = self.table_cabang.item(row, 4)
-
-                kode_c = item_kode.text().strip().upper()
-                nama_c = item_nama.text().strip().upper() if item_nama else f"CABANG {kode_c}"
-                pref_c = item_prefix.text().strip().upper() if item_prefix else "INV"
-
-                seq_json_str = (item_seq.text().strip() if item_seq and item_seq.text().strip() else '{"DEFAULT": 0}')
-                route_json_str = (
-                    item_route.text().strip() if item_route and item_route.text().strip() else '{"DEFAULT": "INV"}')
-
-                try:
-                    json.loads(seq_json_str)
-                    json.loads(route_json_str)
-                except json.JSONDecodeError:
-                    QMessageBox.critical(self, "Error Format JSON",
-                                         f"Baris ke-{row + 1} ({kode_c}) gagal disimpan!\nFormat JSON tidak valid.")
-                    conn.rollback()
-                    conn.close()
-                    return
-
-                cursor.execute("""
-                        INSERT OR REPLACE INTO data_cabang (kode_cabang, nama_cabang, resi_prefix, start_seq_json, aturan_prefix)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (kode_c, nama_c, pref_c, seq_json_str, route_json_str))
-
-            conn.commit()
-            conn.close()
+            sukses, pesan = db_service.simpan_semua_pengaturan_dan_cabang(settings_to_save, branches_to_save)
+            if not sukses:
+                QMessageBox.critical(self, "Error", f"Gagal menyimpan data:\n{pesan}")
+                return
 
             db_lama = CURRENT_SESSION['db_name']
 

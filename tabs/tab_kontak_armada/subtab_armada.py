@@ -6,18 +6,24 @@ from PyQt5.QtWidgets import (
     QHeaderView, QMessageBox, QComboBox,
     QSplitter, QFrame, QFileDialog, QAbstractItemView
 )
-from PyQt5.QtCore import Qt, QSettings
+from PyQt5.QtCore import Qt, QSettings, QTimer
 from PyQt5.QtGui import QFont, QPixmap
 
 from config import CURRENT_SESSION
+
 import services.database_service as db_service
 
-# --- IMPORT UTILS YANG SUDAH DIPECAH (MODULAR) ---
-from utils.typography import MASTER_FONT
-from utils.widget_helpers import paksa_kapital_lineedit as helper_paksa_kapital_lineedit
+from themes.modules.kontak_armada import get_armada_styles
+
+from utils.typography import MASTER_FONT, get_global_font_sizes
 from utils.mixins import ZoomTableMixin
 from utils.table_helper import buat_tabel_item
 import utils.zoom as zoom_helper
+from utils.widget_helpers import (
+    paksa_kapital_lineedit as helper_paksa_kapital_lineedit,
+    terapkan_popup_combobox_bawah,
+)
+
 
 
 class SubTabArmada(QWidget, ZoomTableMixin):
@@ -95,10 +101,24 @@ class SubTabArmada(QWidget, ZoomTableMixin):
 
         self.lbl_jenis = QLabel("Jenis Truk:")
         self.combo_jenis = QComboBox()
-        self.combo_jenis.addItems(["TB", "Tronton", "CDD", "Pick-up"])
-        self.combo_jenis.setEditable(True)
+        self.combo_jenis.addItem("- Pilih jenis -")
+        self.combo_jenis.addItems(["TB", "Tronton", "CDD", "Pick-up", "Lainnya..."])
+        self.combo_jenis.setEditable(False)
+        self.combo_jenis.setProperty("zoom_font_key", None)
+        self.combo_jenis.currentIndexChanged.connect(self.on_jenis_truk_changed)
         layout_kanan.addWidget(self.lbl_jenis)
         layout_kanan.addWidget(self.combo_jenis)
+
+        self.lbl_jenis_lain = QLabel("Jenis Truk Lainnya:")
+        self.input_jenis_lain = QLineEdit()
+        self.input_jenis_lain.setPlaceholderText("Contoh: FUSO WINGBOX")
+        self.input_jenis_lain.textChanged.connect(
+            lambda _t: helper_paksa_kapital_lineedit(self.input_jenis_lain)
+        )
+        self.lbl_jenis_lain.hide()
+        self.input_jenis_lain.hide()
+        layout_kanan.addWidget(self.lbl_jenis_lain)
+        layout_kanan.addWidget(self.input_jenis_lain)
 
         self.lbl_nopol = QLabel("No. Polisi:")
         self.input_nopol = QLineEdit()
@@ -140,7 +160,8 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         layout_kanan.addWidget(self.lbl_preview_foto)
 
         self.btn_pilih_foto = QPushButton("📂 Lampirkan Foto Baru")
-        self.btn_pilih_foto.setCursor(Qt.PointingHandCursor)
+
+        self.btn_pilih_foto.setProperty("zoom_font_key", None)
         self.btn_pilih_foto.clicked.connect(self.pilih_foto_armada)
         layout_kanan.addWidget(self.btn_pilih_foto)
         layout_kanan.addStretch()
@@ -148,12 +169,10 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         hbox_tombol = QHBoxLayout()
         self.btn_aksi = QPushButton("Aksi")
         self.btn_aksi.setFixedHeight(40)
-        self.btn_aksi.setCursor(Qt.PointingHandCursor)
         self.btn_aksi.clicked.connect(self.handle_tombol_aksi)
 
         self.btn_batal = QPushButton("❌ Batal")
         self.btn_batal.setFixedHeight(40)
-        self.btn_batal.setCursor(Qt.PointingHandCursor)
         self.btn_batal.clicked.connect(lambda: self.atur_mode('IDLE'))
 
         hbox_tombol.addWidget(self.btn_batal)
@@ -167,6 +186,7 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         self.atur_mode('IDLE')
         self.refresh_tabel()
         self.sesuaikan_tema_lokal()
+        terapkan_popup_combobox_bawah(self)
 
     # ============================================================
     # MODE STATE & FORM
@@ -203,12 +223,53 @@ class SubTabArmada(QWidget, ZoomTableMixin):
 
     def aktifkan_input(self, aktif):
         self.combo_jenis.setEnabled(aktif)
+        self.input_jenis_lain.setReadOnly(not aktif)
         self.input_nopol.setReadOnly(not aktif)
         self.input_sopir.setReadOnly(not aktif)
         self.input_hp_sopir.setReadOnly(not aktif)
         self.input_keterangan.setReadOnly(not aktif)
+        self.on_jenis_truk_changed(self.combo_jenis.currentIndex())
+
+    def on_jenis_truk_changed(self, _index=None):
+        """Menampilkan input khusus hanya ketika pilihan Lainnya digunakan."""
+        pilih_lainnya = self.combo_jenis.currentText().strip() == "Lainnya..."
+        self.lbl_jenis_lain.setVisible(pilih_lainnya)
+        self.input_jenis_lain.setVisible(pilih_lainnya)
+
+        if not pilih_lainnya:
+            self.input_jenis_lain.clear()
+
+    def ambil_jenis_truk_final(self):
+        """Menghasilkan nama jenis truk yang siap disimpan ke database."""
+        pilihan = self.combo_jenis.currentText().strip()
+        if pilihan == "Lainnya...":
+            return self.input_jenis_lain.text().strip().upper()
+        if self.combo_jenis.currentIndex() <= 0:
+            return ""
+        return pilihan
+
+    def set_jenis_truk_form(self, jenis):
+        """Memilih jenis baku atau mengalihkan jenis tidak umum ke Lainnya."""
+        jenis_bersih = str(jenis or "").strip()
+        if not jenis_bersih:
+            self.combo_jenis.setCurrentIndex(0)
+            return
+
+        for index in range(1, self.combo_jenis.count()):
+            item_text = self.combo_jenis.itemText(index)
+            if item_text == "Lainnya...":
+                continue
+            if item_text.casefold() == jenis_bersih.casefold():
+                self.combo_jenis.setCurrentIndex(index)
+                return
+
+        idx_lainnya = self.combo_jenis.findText("Lainnya...", Qt.MatchFixedString)
+        self.combo_jenis.setCurrentIndex(idx_lainnya)
+        self.input_jenis_lain.setText(jenis_bersih.upper())
 
     def bersihkan_form(self):
+        self.combo_jenis.setCurrentIndex(0)
+        self.input_jenis_lain.clear()
         self.input_nopol.clear()
         self.input_sopir.clear()
         self.input_hp_sopir.clear()
@@ -283,8 +344,8 @@ class SubTabArmada(QWidget, ZoomTableMixin):
 
             base_widths = [tabel.columnWidth(i) for i in range(tabel.columnCount())]
             self._perbarui_cache_lebar_zoom(tabel, base_widths)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Error memuat lebar kolom Armada: {e}")
 
     # ============================================================
     # DATA & TABEL ARMADA
@@ -346,16 +407,33 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         nopol = self.input_nopol.text().strip().upper()
         sopir = self.input_sopir.text().strip().upper()
         hp = self.input_hp_sopir.text().strip()
-        jenis = self.combo_jenis.currentText().strip()
+        jenis = self.ambil_jenis_truk_final()
         ket = self.input_keterangan.text().strip().upper()
         foto = self.current_foto_path
 
-        if not nopol or not sopir:
-            QMessageBox.warning(self, "Peringatan", "No. Polisi dan Nama Sopir wajib diisi!")
+        if not nopol:
+            QMessageBox.warning(self, "Peringatan", "No. Polisi wajib diisi!")
+            self.input_nopol.setFocus()
+            return
+
+        if not jenis:
+            if self.combo_jenis.currentText().strip() == "Lainnya...":
+                QMessageBox.warning(self, "Peringatan", "Jenis Truk Lainnya wajib diisi!")
+                self.input_jenis_lain.setFocus()
+            else:
+                QMessageBox.warning(self, "Peringatan", "Jenis Truk wajib dipilih!")
+                self.combo_jenis.setFocus()
             return
 
         try:
-            db_service.simpan_atau_update_armada_full(nopol, jenis, sopir, hp, ket, foto)
+            sukses, pesan = db_service.simpan_atau_update_armada_full(
+                nopol, jenis, sopir, hp, ket, foto, mode=self.mode
+            )
+
+            if not sukses:
+                QMessageBox.warning(self, "Data Armada", pesan)
+                return
+
             QMessageBox.information(self, "Sukses", f"Data armada {nopol} berhasil disimpan!")
             self.atur_mode('IDLE')
             self.refresh_tabel()
@@ -373,12 +451,7 @@ class SubTabArmada(QWidget, ZoomTableMixin):
             self.input_keterangan.setText(self.tabel_armada.item(row, 5).text())
 
             jenis_text = self.tabel_armada.item(row, 1).text()
-            idx_jenis = self.combo_jenis.findText(jenis_text, Qt.MatchFixedString)
-
-            if idx_jenis >= 0:
-                self.combo_jenis.setCurrentIndex(idx_jenis)
-            else:
-                self.combo_jenis.setCurrentText(jenis_text)
+            self.set_jenis_truk_form(jenis_text)
 
             foto_val = self.tabel_armada.item(row, 6).text()
             self.current_foto_path = foto_val if foto_val and foto_val != "None" else ""
@@ -389,6 +462,7 @@ class SubTabArmada(QWidget, ZoomTableMixin):
 
     def showEvent(self, event):
         super().showEvent(event)
+        terapkan_popup_combobox_bawah(self)
 
         self.refresh_tabel()
         # Tema dikelola oleh TabKontakArmada.
@@ -397,65 +471,227 @@ class SubTabArmada(QWidget, ZoomTableMixin):
     # TEMA DAN ZOOM
     # ============================================================
 
+    def _kunci_combo_dan_tombol_foto_statis(self):
+        """
+        Mengunci ComboBox Jenis Truk dan tombol Lampirkan Foto agar tidak
+        berubah ukuran ketika helper zoom global dijalankan oleh main window.
+
+        Main window menerapkan zoom global setelah sesuaikan_tema_lokal().
+        Karena itu fungsi ini dipanggil langsung dan sekali lagi melalui
+        QTimer.singleShot(0, ...) agar menjadi lapisan terakhir.
+        """
+        if not hasattr(self, "combo_jenis") or not hasattr(self, "btn_pilih_foto"):
+            return
+
+        font_statis_base = get_global_font_sizes(0)["sz_base"]
+        font_statis_input = get_global_font_sizes(0)["sz_input"]
+
+        style_input_normal = getattr(
+            self,
+            "_style_input_normal_armada",
+            "background-color: #ffffff; color: #0f172a; "
+            "border: 1px solid #cbd5e1; border-radius: 4px;"
+        )
+        style_input_locked = getattr(
+            self,
+            "_style_input_locked_armada",
+            "background-color: #f1f5f9; color: #64748b; "
+            "border: 1px dashed #cbd5e1; border-radius: 4px;"
+        )
+        style_btn_foto = getattr(
+            self,
+            "_style_btn_foto_armada",
+            "QPushButton { background-color: #e2e8f0; color: #0f172a; "
+            "border: 1px solid #cbd5e1; border-radius: 4px; } "
+            "QPushButton:hover { background-color: #cbd5e1; }"
+        )
+
+        # --------------------------------------------------------
+        # ComboBox Jenis Truk: teks aktif, editor, dan dropdown
+        # --------------------------------------------------------
+        font_combo_size = max(8, font_statis_input - 1)
+        font_combo = QFont(MASTER_FONT, font_combo_size)
+        self.combo_jenis.setProperty("zoom_font_key", None)
+        self.combo_jenis.setFont(font_combo)
+        self.combo_jenis.setMinimumHeight(30)
+        self.combo_jenis.setMaximumHeight(30)
+
+        combo_style = (
+            style_input_locked if not self.combo_jenis.isEnabled()
+            else style_input_normal
+        )
+        self.combo_jenis.setStyleSheet(
+            f"{combo_style} "
+            f"font-family: '{MASTER_FONT}'; "
+            f"font-size: {font_combo_size}pt; "
+            "padding: 1px 5px;"
+        )
+
+        combo_editor = self.combo_jenis.lineEdit()
+        if combo_editor is not None:
+            combo_editor.setProperty("zoom_font_key", None)
+            combo_editor.setFont(font_combo)
+            combo_editor.setMinimumHeight(26)
+            combo_editor.setMaximumHeight(26)
+            combo_editor.setStyleSheet(
+                f"font-family: '{MASTER_FONT}'; "
+                f"font-size: {font_combo_size}pt; "
+                "background: transparent; border: none; padding: 0px 2px;"
+            )
+
+        combo_view = self.combo_jenis.view()
+        if combo_view is not None:
+            combo_view.setFont(font_combo)
+            combo_view.setStyleSheet(f"""
+                QAbstractItemView {{
+                    font-family: '{MASTER_FONT}';
+                    font-size: {font_combo_size}pt;
+                }}
+                QAbstractItemView::item {{
+                    min-height: 26px;
+                    max-height: 26px;
+                    padding: 2px 5px;
+                }}
+            """)
+
+        # --------------------------------------------------------
+        # Tombol Lampirkan Foto: font, tinggi, dan padding statis
+        # --------------------------------------------------------
+        font_foto = QFont(MASTER_FONT, font_statis_base)
+        self.btn_pilih_foto.setProperty("zoom_font_key", None)
+        self.btn_pilih_foto.setFont(font_foto)
+        self.btn_pilih_foto.setMinimumHeight(30)
+        self.btn_pilih_foto.setMaximumHeight(30)
+        self.btn_pilih_foto.setStyleSheet(
+            style_btn_foto
+            + f"""
+            QPushButton {{
+                font-family: '{MASTER_FONT}';
+                font-size: {font_statis_base}pt;
+                padding: 2px 6px;
+            }}
+            """
+        )
+
+        self.combo_jenis.updateGeometry()
+        self.btn_pilih_foto.updateGeometry()
+
     def sesuaikan_tema_lokal(self):
         win = self.window()
         is_dark = win.current_theme == "dark" if win and hasattr(win, 'current_theme') else False
         z = zoom_helper.dapatkan_zoom_level("TabKontakArmada")
 
         self.label_judul.setProperty("zoom_font_key", "sz_title")
-        self.lbl_judul_kanan.setProperty("zoom_font_key", "sz_tag")
 
-        warna_btn_utama = "#3b82f6" if self.mode in ['IDLE', 'PREVIEW'] else "#22c55e"
-        warna_btn_utama_hover = "#2563eb" if self.mode in ['IDLE', 'PREVIEW'] else "#16a34a"
+        # 1. Ambil dictionary style dari modul terpusat
+        st = get_armada_styles(is_dark, self.mode)
 
-        if is_dark:
-            style_panel_kanan = "QFrame#panelEditor { background-color: #1e293b; border-radius: 8px; border: 1px solid #334155; }"
-            style_input_normal = "background-color: #0f172a; color: #ffffff; border: 1px solid #4c525e; border-radius: 4px;"
-            style_input_locked = "background-color: #1e293b; color: #94a3b8; border: 1px dashed #475569; border-radius: 4px;"
-            style_btn_batal = "QPushButton { background-color: transparent; color: #ef4444; border: 1px solid #ef4444; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #7f1d1d; color: white; }"
-            style_btn_foto = "QPushButton { background-color: #334155; color: white; border: 1px solid #475569; border-radius: 4px; } QPushButton:hover { background-color: #475569; }"
-            style_label_judul = "color: #ffffff; font-weight: bold;"
-            style_label_judul_kanan = "color: #60a5fa; font-weight: bold;"
-        else:
-            style_panel_kanan = "QFrame#panelEditor { background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }"
-            style_input_normal = "background-color: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 4px;"
-            style_input_locked = "background-color: #f1f5f9; color: #64748b; border: 1px dashed #cbd5e1; border-radius: 4px;"
-            style_btn_batal = "QPushButton { background-color: transparent; color: #ef4444; border: 1px solid #ef4444; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #fef2f2; }"
-            style_btn_foto = "QPushButton { background-color: #e2e8f0; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 4px; } QPushButton:hover { background-color: #cbd5e1; }"
-            style_label_judul = "color: #0f172a; font-weight: bold;"
-            style_label_judul_kanan = "color: #2563eb; font-weight: bold;"
+        # Simpan style aktif untuk callback pengunci statis
+        self._style_input_normal_armada = st["input_normal"]
+        self._style_input_locked_armada = st["input_locked"]
+        self._style_btn_foto_armada = st["btn_foto"]
 
-        self.panel_kanan.setStyleSheet(style_panel_kanan)
+        self.panel_kanan.setStyleSheet(st["panel_kanan"])
 
-        # 💡 Menggunakan metode Mixin
-        self._set_style_dasar_zoom(self.label_judul, style_label_judul)
-        self._set_style_dasar_zoom(self.lbl_judul_kanan, style_label_judul_kanan)
-        self._set_style_dasar_zoom(self.btn_batal, style_btn_batal)
-        self._set_style_dasar_zoom(self.btn_pilih_foto, style_btn_foto)
-        self._set_style_dasar_zoom(self.input_cari, style_input_normal)
-        self._set_style_dasar_zoom(
-            self.btn_aksi,
-            f"QPushButton {{ background-color: {warna_btn_utama}; color: white; font-weight: bold; border-radius: 4px; }} "
-            f"QPushButton:hover {{ background-color: {warna_btn_utama_hover}; }}"
-        )
+        # Style Panel Kiri (Mengikut Zoom)
+        self._set_style_dasar_zoom(self.label_judul, st["label_judul"])
+        self._set_style_dasar_zoom(self.input_cari, st["input_normal"])
 
-        for input_widget in [self.input_nopol, self.input_sopir, self.input_hp_sopir, self.input_keterangan]:
-            self._set_style_dasar_zoom(
-                input_widget,
-                style_input_locked if input_widget.isReadOnly() else style_input_normal
-            )
+        # --- RESET MARGIN ANTI-OVERFLOW ---
+        self.layout().setContentsMargins(10, 10, 10, 10)
+        self.panel_kiri.layout().setContentsMargins(0, 0, 10, 0)
+        self.panel_kanan.layout().setContentsMargins(15, 15, 15, 15)
 
-        self._set_style_dasar_zoom(
-            self.combo_jenis,
-            style_input_locked if not self.combo_jenis.isEnabled() else style_input_normal
-        )
-
-        if hasattr(self.tabel_armada, "_zoom_base_stylesheet"):
-            delattr(self.tabel_armada, "_zoom_base_stylesheet")
+        # Blokir signal tabel
+        self.tabel_armada.horizontalHeader().blockSignals(True)
 
         self._sedang_menerapkan_zoom = True
         try:
             zoom_helper.terapkan_zoom_semua_elemen(container_widget=self, z=z, is_dark=is_dark)
         finally:
             self._sedang_menerapkan_zoom = False
+            self.tabel_armada.horizontalHeader().blockSignals(False)
+
+        # Paksa skala kolom tabel
+        zoom_helper._skalakan_kolom_tableview(self.tabel_armada, z)
+
+        # ========================================================
+        # --- KUNCI STATIS TOTAL PANEL KANAN (EDITOR ARMADA) ---
+        # ========================================================
+        font_statis_base = get_global_font_sizes(0)["sz_base"]
+        font_statis_input = get_global_font_sizes(0)["sz_input"]
+
+        # 1. Input Pencarian Kiri (Kebal Zoom)
+        font_cari = self.input_cari.font()
+        font_cari.setPointSize(font_statis_input)
+        self.input_cari.setFont(font_cari)
+        self.input_cari.setFixedHeight(30)
+        self.input_cari.setFixedWidth(230)
+
+        # 2. Judul & Label Form Editor
+        font_judul_kanan = QFont(MASTER_FONT, font_statis_base + 1, QFont.Bold)
+        self.lbl_judul_kanan.setFont(font_judul_kanan)
+
+        # 💡 PERBAIKAN DI SINI: Gunakan st["label_judul_kanan"] menggantikan style_label_judul_kanan
+        self.lbl_judul_kanan.setStyleSheet(st["label_judul_kanan"])
+
+        font_label = QFont(MASTER_FONT, font_statis_base)
+        for lbl in [self.lbl_jenis, self.lbl_jenis_lain, self.lbl_nopol, self.lbl_sopir, self.lbl_hp, self.lbl_ket,
+                    self.lbl_foto_title]:
+            lbl.setFont(font_label)
+
+        # 3. Widget Input Form Editor
+        font_input = QFont(MASTER_FONT, font_statis_input)
+        for w_input in [self.input_jenis_lain, self.input_nopol, self.input_sopir, self.input_hp_sopir,
+                        self.input_keterangan, self.combo_jenis]:
+            w_input.setFont(font_input)
+            w_input.setFixedHeight(30)
+
+            style_aktif = st["input_locked"] if (
+                    (hasattr(w_input, 'isReadOnly') and w_input.isReadOnly())
+                    or not w_input.isEnabled()
+            ) else st["input_normal"]
+
+            w_input.setStyleSheet(style_aktif)
+
+        # FIX: teks TB pada editor internal QComboBox
+        combo_editor = self.combo_jenis.lineEdit()
+        if combo_editor is not None:
+            combo_editor.setFont(font_input)
+            combo_editor.setProperty("zoom_font_key", None)
+
+        if self.combo_jenis.view():
+            self.combo_jenis.view().setFont(font_input)
+            self.combo_jenis.view().setStyleSheet(f"""
+                        QAbstractItemView {{
+                            font-family: '{MASTER_FONT}';
+                            font-size: {font_statis_input}pt;
+                        }}
+                        QAbstractItemView::item {{
+                            min-height: 26px;
+                            padding: 2px 5px;
+                        }}
+                    """)
+
+        # 4. Tombol-tombol Editor
+        font_btn = QFont(MASTER_FONT, font_statis_base, QFont.Bold)
+
+        self.btn_pilih_foto.setFont(font_label)
+        self.btn_pilih_foto.setStyleSheet(st["btn_foto"])
+
+        self.btn_batal.setFont(font_btn)
+        self.btn_batal.setFixedHeight(38)
+        self.btn_batal.setStyleSheet(st["btn_batal"])
+
+        self.btn_aksi.setFont(font_btn)
+        self.btn_aksi.setFixedHeight(38)
+        self.btn_aksi.setStyleSheet(st["btn_aksi"])
+
+        self._kunci_combo_dan_tombol_foto_statis()
+        QTimer.singleShot(0, self._kunci_combo_dan_tombol_foto_statis)
+
+        # --- KUNCI MATI MARGIN LAYOUT ---
+        self.layout().setContentsMargins(10, 10, 10, 10)
+        self.panel_kiri.layout().setContentsMargins(0, 0, 10, 0)
+        self.panel_kanan.layout().setContentsMargins(15, 15, 15, 15)
 

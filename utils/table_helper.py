@@ -1,38 +1,51 @@
 # utils/table_helper.py
-from PyQt5.QtWidgets import QTableWidgetItem
+from typing import Any, Optional
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QBrush, QColor
+from PyQt5.QtWidgets import QTableWidgetItem
+
+
+def _warna_valid(warna: Optional[str]) -> Optional[QColor]:
+    """Membuat QColor hanya ketika nilai warna valid."""
+    if not warna:
+        return None
+
+    hasil = QColor(str(warna))
+    return hasil if hasil.isValid() else None
 
 
 def buat_tabel_item(
-        text: str,
-        editable: bool = True,
-        alignment: Qt.AlignmentFlag = None,
-        bg_color: str = None,
-        fg_color: str = None
+    text: Any,
+    editable: bool = True,
+    alignment: Optional[int] = None,
+    bg_color: Optional[str] = None,
+    fg_color: Optional[str] = None,
 ) -> QTableWidgetItem:
     """
-    Helper utility untuk membuat QTableWidgetItem secara instan.
-    Mengotomatisasi setFlags, setAlignment, setBackground, dan setForeground dalam 1 baris.
+    Membuat ``QTableWidgetItem`` dengan konfigurasi umum dalam satu fungsi.
+
+    Nilai ``None`` diubah menjadi string kosong. Warna yang tidak valid
+    diabaikan agar helper tidak menghasilkan item dengan brush invalid.
     """
-    # Pastikan data none diubah jadi string kosong agar tidak crash
-    nilai_teks = str(text) if text is not None else ""
-    item = QTableWidgetItem(nilai_teks)
+    item = QTableWidgetItem(
+        "" if text is None else str(text)
+    )
 
-    # 1. Atur Hak Akses Edit (Editable)
     if not editable:
-        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        item.setFlags(
+            item.flags() & ~Qt.ItemIsEditable
+        )
 
-    # 2. Atur Alignment Posisi Teks
     if alignment is not None:
-        item.setTextAlignment(alignment)
+        item.setTextAlignment(int(alignment))
 
-    # 3. Atur Warna Latar (Background) jika ada
-    if bg_color:
-        item.setBackground(QBrush(QColor(bg_color)))
+    warna_latar = _warna_valid(bg_color)
+    if warna_latar is not None:
+        item.setBackground(QBrush(warna_latar))
 
-    # 4. Atur Warna Teks (Foreground) jika ada
-    if fg_color:
-        item.setForeground(QBrush(QColor(fg_color)))
+    warna_teks = _warna_valid(fg_color)
+    if warna_teks is not None:
+        item.setForeground(QBrush(warna_teks))
 
     return item

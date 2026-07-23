@@ -1,5 +1,4 @@
-"""Stylesheet khusus Tab Buku Gudang dan dialog pendukungnya."""
-
+# themes/modules/buku_gudang.py
 from __future__ import annotations
 
 from typing import Dict, Optional, Tuple

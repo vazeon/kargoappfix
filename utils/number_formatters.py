@@ -6,9 +6,7 @@ from numbers import Integral, Real
 
 from PyQt5.QtWidgets import QLineEdit
 
-from .widget_helpers import (
-    _blokir_signal_sementara,
-)
+from .widget_helpers import blokir_signal_sementara
 
 def _ambil_digit(nilai: Any) -> str:
     """
@@ -86,7 +84,7 @@ def format_input_ribuan_gaya_indonesia(
     angka_saja = _ambil_digit(text)
 
     if not angka_saja:
-        with _blokir_signal_sementara(edit_widget):
+        with blokir_signal_sementara(edit_widget):
             edit_widget.clear()
 
         return
@@ -96,7 +94,7 @@ def format_input_ribuan_gaya_indonesia(
     pos_lama = edit_widget.cursorPosition()
     panjang_lama = len(text)
 
-    with _blokir_signal_sementara(edit_widget):
+    with blokir_signal_sementara(edit_widget):
         edit_widget.setText(text_baru)
 
         panjang_baru = len(text_baru)

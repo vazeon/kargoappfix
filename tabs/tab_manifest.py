@@ -15,8 +15,15 @@ from themes.modules.manifest import (
     get_manifest_row_highlight,
     get_manifest_styles,
 )
-from utils.typography import MASTER_FONT
-from utils.widget_helpers import paksa_kapital_lineedit
+
+from utils.typography import get_global_font_sizes
+from utils import zoom as zoom_helper
+from utils.number_formatters import (format_ke_rupiah, format_angka_indonesia)
+from utils.table_helper import buat_tabel_item
+from utils.widget_helpers import (
+    paksa_kapital_lineedit,
+    terapkan_popup_combobox_bawah,
+)
 from utils.date_ind_format import format_tanggal_ke_ui
 
 
@@ -71,7 +78,7 @@ class TabManifest(QWidget):
         hbox_top.addWidget(QLabel("Armada:"))
         self.cb_jenis_truk = QComboBox()
         self.cb_jenis_truk.addItem("- Pilih jenis -")  # Index 0 sebagai placeholder
-        self.cb_jenis_truk.addItems(["TB", "Tronton", "CDD", "Pick-up"])
+        self.cb_jenis_truk.addItems(["TB", "Tronton", "CDD", "Pick-up", "Lainnya..."])
         self.cb_jenis_truk.setFixedWidth(120)
 
         # --- BIKIN PLACEHOLDER SAJA YANG ITALIC ---
@@ -94,10 +101,20 @@ class TabManifest(QWidget):
 
         # Hubungkan fungsi dan jalankan sekali di awal
         self.cb_jenis_truk.currentIndexChanged.connect(ubah_font_placeholder)
+        self.cb_jenis_truk.currentIndexChanged.connect(self.on_jenis_truk_manifest_changed)
         ubah_font_placeholder(0)
         # --------------------------------
 
         hbox_top.addWidget(self.cb_jenis_truk)
+
+        self.txt_jenis_truk_lain = QLineEdit()
+        self.txt_jenis_truk_lain.setPlaceholderText("Jenis lainnya")
+        self.txt_jenis_truk_lain.setFixedWidth(125)
+        self.txt_jenis_truk_lain.textChanged.connect(
+            lambda: paksa_kapital_lineedit(self.txt_jenis_truk_lain)
+        )
+        self.txt_jenis_truk_lain.hide()
+        hbox_top.addWidget(self.txt_jenis_truk_lain)
 
         # 2. Input No. Pol (Opsional)
         self.txt_no_pol = QLineEdit()
@@ -121,18 +138,16 @@ class TabManifest(QWidget):
 
         hbox_top.addStretch()
         self.btn_proses = QPushButton("⚡ BUAT MANIFEST")
-        self.btn_proses.setCursor(Qt.PointingHandCursor)
         hbox_top.addWidget(self.btn_proses)
 
         self.btn_batal_edit = QPushButton("❌ BATAL")
-        self.btn_batal_edit.setCursor(Qt.PointingHandCursor)
         self.btn_batal_edit.clicked.connect(self.batal_edit)
         self.btn_batal_edit.hide()
         hbox_top.addWidget(self.btn_batal_edit)
         layout_kiri.addLayout(hbox_top)
 
         self.tabel_manifest = QTableWidget()
-        self.tabel_manifest.setColumnCount(13)  # Ubah dari 11 ke 13
+        self.tabel_manifest.setColumnCount(13)
         self.tabel_manifest.setHorizontalHeaderLabels(
             ["✔", "NO.", "RESI", "TGL MASUK", "PENGIRIM", "PENERIMA", "TUJUAN", "NAMA BARANG", "KOLI", "BERAT (kg)",
              "KUBIK (m3)", "TOTAL ONGKIR", "KETERANGAN"])
@@ -183,112 +198,174 @@ class TabManifest(QWidget):
         self.generate_no_manifest()
         self.sesuaikan_tema_lokal()
         self.setup_autocomplete_armada()
+        terapkan_popup_combobox_bawah(self)
+
+    def on_jenis_truk_manifest_changed(self, _index=None):
+        """Menampilkan kolom jenis lainnya hanya saat diperlukan."""
+        pilih_lainnya = self.cb_jenis_truk.currentText().strip() == "Lainnya..."
+        self.txt_jenis_truk_lain.setVisible(pilih_lainnya)
+        if not pilih_lainnya:
+            self.txt_jenis_truk_lain.clear()
+
+    def ambil_jenis_truk_manifest(self):
+        """Menghasilkan jenis truk baku untuk payload Manifest."""
+        pilihan = self.cb_jenis_truk.currentText().strip()
+        if pilihan == "Lainnya...":
+            return self.txt_jenis_truk_lain.text().strip().upper()
+        if self.cb_jenis_truk.currentIndex() <= 0:
+            return ""
+        return pilihan
+
+    def set_jenis_truk_manifest(self, jenis):
+        """Memilih jenis umum atau mengisi kolom Lainnya untuk jenis khusus."""
+        jenis_bersih = str(jenis or "").strip()
+        if not jenis_bersih:
+            self.cb_jenis_truk.setCurrentIndex(0)
+            return
+
+        for index in range(1, self.cb_jenis_truk.count()):
+            item_text = self.cb_jenis_truk.itemText(index)
+            if item_text == "Lainnya...":
+                continue
+            if item_text.casefold() == jenis_bersih.casefold():
+                self.cb_jenis_truk.setCurrentIndex(index)
+                return
+
+        idx_lainnya = self.cb_jenis_truk.findText("Lainnya...", Qt.MatchFixedString)
+        self.cb_jenis_truk.setCurrentIndex(idx_lainnya)
+        self.txt_jenis_truk_lain.setText(jenis_bersih.upper())
 
     def setup_autocomplete_armada(self):
         try:
-            # Ambil data dari database
-            rows = db_service.ambil_armada_list()
-            # Ambil hanya nama sopir dan hilangkan duplikat
-            sopirs = list(set([row[1] for row in rows if row[1]]))
+            rows = db_service.ambil_armada_list() or []
+            sopirs = sorted({str(row[1]).strip() for row in rows if len(row) > 1 and row[1]})
 
-            # Setup khusus untuk input Nama Sopir
+            completer_lama = getattr(self, 'completer_sopir', None)
+            if completer_lama is not None:
+                try:
+                    completer_lama.activated.disconnect(self.on_sopir_selected)
+                except (TypeError, RuntimeError):
+                    pass
+                completer_lama.deleteLater()
+
             self.completer_sopir = QCompleter(sopirs, self)
             self.completer_sopir.setCaseSensitivity(Qt.CaseInsensitive)
             self.txt_sopir.setCompleter(self.completer_sopir)
-
-            # Trigger saat nama sopir dipilih/di-enter
             self.completer_sopir.activated.connect(self.on_sopir_selected)
 
-            # Pastikan Nopol TIDAK memiliki autocomplete (sesuai rule)
             self.txt_no_pol.setCompleter(None)
         except Exception as e:
-            print(f"Gagal memuat autocomplete armada: {e}")
+            QMessageBox.warning(self, "Warning Database", f"Gagal memuat autocomplete armada: {e}")
 
     def on_sopir_selected(self, sopir):
         row = db_service.ambil_detail_armada_by_sopir(sopir)
         if row:
-            no_polisi = row[0]
-            jenis_truk = row[1]
+            no_polisi = row[0] if len(row) > 0 else ""
+            jenis_truk = row[1] if len(row) > 1 else ""
+            ket_armada = row[2] if len(row) > 2 else ""
 
-            # Autofill Nomor Polisi
             if no_polisi:
-                self.txt_no_pol.setText(no_polisi)
+                self.txt_no_pol.setText(str(no_polisi))
 
-            # Autofill Jenis Truk di ComboBox
             if jenis_truk:
-                idx = self.cb_jenis_truk.findText(jenis_truk, Qt.MatchFixedString)
-                if idx >= 0:
-                    self.cb_jenis_truk.setCurrentIndex(idx)
-                else:
-                    self.cb_jenis_truk.setCurrentText(jenis_truk)
+                self.set_jenis_truk_manifest(jenis_truk)
+
+            if ket_armada and str(ket_armada).strip() not in ('', '-'):
+                self.txt_keterangan.setText(str(ket_armada))
 
     def generate_no_manifest(self):
-        if self.is_edit_mode: self.txt_no_manifest.setText(self.edit_manifest_id); return
+        if self.is_edit_mode:
+            self.txt_no_manifest.setText(self.edit_manifest_id)
+            return
+
         prefix = f"M-{CURRENT_SESSION.get('aturan_prefix', {}).get(self.cb_filter_wilayah.currentText(), 'MF')}"
         seq = 1
         try:
             rows = db_service.ambil_no_manifest_list_by_prefix(prefix, CURRENT_SESSION.get('kode_cabang', 'PUSAT'))
-            if rows: seq = max(int(r[0].split('-')[-1]) for r in rows if r[0]) + 1
+            if rows:
+                seq = max(int(r[0].split('-')[-1]) for r in rows if r[0]) + 1
         except:
             pass
         self.txt_no_manifest.setText(f"{prefix}-{seq:04d}")
 
     def refresh_tahun_filter(self):
-        self.cb_tahun_filter.blockSignals(True);
+        self.cb_tahun_filter.blockSignals(True)
         self.cb_tahun_filter.clear()
         self.cb_tahun_filter.addItem("Semua")
         self.cb_tahun_filter.addItem(str(QDate.currentDate().year()))
-        self.cb_tahun_filter.setCurrentIndex(1);
+        self.cb_tahun_filter.setCurrentIndex(1)
         self.cb_tahun_filter.blockSignals(False)
 
     def load_data_resi_gudang(self):
+        # Amankan zoom_base sebelum merender isi tabel agar kolom tidak melompat
+        if not hasattr(self.tabel_manifest, "_zoom_base_column_widths"):
+            self.tabel_manifest._zoom_base_column_widths = {i: self.tabel_manifest.columnWidth(i) for i in
+                                                            range(self.tabel_manifest.columnCount())}
+
+        self.tabel_manifest.blockSignals(True)
         self.tabel_manifest.setRowCount(0)
         is_dark = self.window().current_theme == "dark" if self.window() and hasattr(self.window(),
                                                                                      'current_theme') else False
+
         try:
             rows = db_service.ambil_resi_untuk_manifest(CURRENT_SESSION.get('kode_cabang', 'PUSAT'),
                                                         self.cb_filter_wilayah.currentText(), self.is_edit_mode,
                                                         self.edit_manifest_id)
             for row in rows:
-                pos = self.tabel_manifest.rowCount();
+                pos = self.tabel_manifest.rowCount()
                 self.tabel_manifest.insertRow(pos)
                 belong = self.is_edit_mode and row[9] == self.edit_manifest_id
                 bg = get_manifest_row_highlight(is_dark, belong)
 
-                chk = QTableWidgetItem()
+                # Pembuatan checkbox kolom 0
+                chk = buat_tabel_item(text="", editable=False, alignment=Qt.AlignCenter)
                 chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 chk.setCheckState(Qt.Checked if belong else Qt.Unchecked)
-                if bg: chk.setBackground(QBrush(bg))
+                if bg:
+                    chk.setBackground(QBrush(bg))
                 self.tabel_manifest.setItem(pos, self.KOL_CHECK, chk)
 
-                item_no = QTableWidgetItem(str(pos + 1))
-                if bg: item_no.setBackground(QBrush(bg))
+                # Pembuatan nomor urut
+                item_no = buat_tabel_item(text=str(pos + 1), editable=False, alignment=Qt.AlignCenter)
+                if bg:
+                    item_no.setBackground(QBrush(bg))
                 self.tabel_manifest.setItem(pos, self.KOL_NO, item_no)
 
+                # Pembuatan sel lainnya
                 for i, d in enumerate(row[:9]):
                     val = str(d) if d is not None else ""
                     col = i + 2
+
                     if col == self.KOL_TGL_MASUK and val:
                         val = format_tanggal_ke_ui(val)
                     elif col == self.KOL_TUJUAN and " - " in val:
                         val = val.split(" - ")[-1]
                     elif col in [self.KOL_KOLI, self.KOL_BERAT, self.KOL_CBM]:
-                        val = self.format_angka(d, "cbm" if col == self.KOL_CBM else "bulat")
+                        val = format_angka_indonesia(d, kosong_jika_nol=True, nilai_kosong="-")
 
-                    item = QTableWidgetItem(val)
-                    if col in [self.KOL_KOLI, self.KOL_BERAT, self.KOL_CBM]: item.setTextAlignment(
-                        Qt.AlignRight | Qt.AlignVCenter)
-                    if bg: item.setBackground(QBrush(bg))
+                    # Penentuan Alignment Berbasis Tipe Data
+                    if col in [self.KOL_KOLI, self.KOL_BERAT, self.KOL_CBM]:
+                        align = Qt.AlignRight | Qt.AlignVCenter
+                    elif col == self.KOL_TGL_MASUK:
+                        align = Qt.AlignCenter | Qt.AlignVCenter
+                    else:
+                        align = Qt.AlignLeft | Qt.AlignVCenter
+
+                    item = buat_tabel_item(text=val, editable=False, alignment=align)
+                    if bg:
+                        item.setBackground(QBrush(bg))
                     self.tabel_manifest.setItem(pos, col, item)
 
-                val_ongkir = self.format_angka(row[10], "bulat")
-                item_ongkir = QTableWidgetItem(val_ongkir)
-                item_ongkir.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                if bg: item_ongkir.setBackground(QBrush(bg))
+                # Kolom Ongkir
+                val_ongkir = format_ke_rupiah(row[10]) if row[10] else "-"
+                item_ongkir = buat_tabel_item(text=val_ongkir, editable=False,
+                                              alignment=Qt.AlignRight | Qt.AlignVCenter)
+                if bg:
+                    item_ongkir.setBackground(QBrush(bg))
                 self.tabel_manifest.setItem(pos, self.KOL_ONGKIR, item_ongkir)
 
                 txt_ket_row = QLineEdit()
-                txt_ket_row.setFrame(False)  # Agar menyatu dengan tabel
+                txt_ket_row.setFrame(False)
                 txt_ket_row.setPlaceholderText("Ket...")
                 if belong and row[11]:
                     txt_ket_row.setText(str(row[11]))
@@ -296,12 +373,12 @@ class TabManifest(QWidget):
 
             self.load_histori()
         except Exception as e:
-            print(f"Error Load: {e}")
+            QMessageBox.critical(self, "Error Load Data", f"Gagal memuat data resi manifes:\n{e}")
+
+        self.tabel_manifest.blockSignals(False)
 
     def load_histori(self):
         self.list_histori.clear()
-
-        # Deteksi tema aktif untuk menyesuaikan warna teks
         win = self.window()
         is_dark = win.current_theme == "dark" if win and hasattr(win, 'current_theme') else False
 
@@ -309,7 +386,6 @@ class TabManifest(QWidget):
             rows = db_service.ambil_histori_manifest(CURRENT_SESSION.get('kode_cabang', 'PUSAT'),
                                                      self.cb_tahun_filter.currentText())
 
-            # Kamus nama bulan Indonesia
             NAMA_BULAN = {
                 "01": "Januari", "02": "Februari", "03": "Maret", "04": "April",
                 "05": "Mei", "06": "Juni", "07": "Juli", "08": "Agustus",
@@ -318,16 +394,10 @@ class TabManifest(QWidget):
 
             parents = {}
             for r in rows:
-                # Ambil data mentah
                 tgl_raw, m_id, armada, count = str(r[0]), str(r[1]), str(r[2]), r[3]
-
-                # Format ke gaya Indonesia
                 tgl_indo = format_tanggal_ke_ui(tgl_raw)
-
-                # Ambil bulan untuk judul folder
                 mm = tgl_indo[3:5]
                 nama_bln = NAMA_BULAN.get(mm, "Unknown")
-
                 title = f"📂 {nama_bln}"
 
                 if title not in parents:
@@ -335,11 +405,8 @@ class TabManifest(QWidget):
                     parents[title].setText(0, title)
 
                 child = QTreeWidgetItem(parents[title])
-
-                # --- SETTING KOLOM 0 (TANGGAL) ---
                 child.setText(0, tgl_indo)
 
-                # 1. Atur font dan warna tanggal melalui modul theme.
                 ukuran_dasar = self.list_histori.font().pointSize()
                 font_tanggal, warna_abu = get_manifest_history_date_appearance(
                     is_dark,
@@ -348,97 +415,118 @@ class TabManifest(QWidget):
                 child.setFont(0, font_tanggal)
                 child.setForeground(0, QBrush(warna_abu))
 
-                # --- SETTING KOLOM 1 (ID & ARMADA) ---
-                # Jika armada kosong (karena opsional), sembunyikan tanda "-" agar rapi
                 armada_display = f" | {armada}" if armada and armada.strip() != "-" else ""
                 child.setText(1, f"{m_id}{armada_display} ({count} Resi)")
 
             self.list_histori.expandAll()
         except Exception as e:
-            print(f"Gagal memuat histori manifest: {e}")
+            QMessageBox.critical(self, "Error Histori", f"Gagal memuat histori manifest:\n{e}")
 
     def update_armada_ke_manifest(self):
-        m_id = self.edit_manifest_id if self.is_edit_mode else self.txt_no_manifest.text()
+        m_id = self.edit_manifest_id if self.is_edit_mode else self.txt_no_manifest.text().strip()
         resi = []
+
         for r in range(self.tabel_manifest.rowCount()):
-            if self.tabel_manifest.item(r, self.KOL_CHECK).checkState() == Qt.Checked:
-                no_resi = self.tabel_manifest.item(r, self.KOL_RESI).text()
+            if self.tabel_manifest.isRowHidden(r):
+                continue
+
+            item_check = self.tabel_manifest.item(r, self.KOL_CHECK)
+            item_resi = self.tabel_manifest.item(r, self.KOL_RESI)
+            if item_check and item_resi and item_check.checkState() == Qt.Checked:
                 widget_ket = self.tabel_manifest.cellWidget(r, self.KOL_KET)
                 ket_text = widget_ket.text().strip() if widget_ket else ""
-                resi.append((no_resi, ket_text))
+                resi.append((item_resi.text().strip(), ket_text))
 
         if not resi:
-            return QMessageBox.warning(self, "Warning", "Centang minimal 1 resi!")
+            QMessageBox.warning(self, "Warning", "Centang minimal 1 resi!")
+            return
 
-        # --- BACA INPUT DETAIL ARMADA ---
         armada_idx = self.cb_jenis_truk.currentIndex()
-        armada_text = self.cb_jenis_truk.currentText()
+        armada_text = self.ambil_jenis_truk_manifest()
         nopol = self.txt_no_pol.text().strip().upper()
         sopir = self.txt_sopir.text().strip().upper()
-        keterangan = self.txt_keterangan.text().strip()
+        keterangan = self.txt_keterangan.text().strip().upper()
 
-        # --- KONDISI 1: MODE TITIP MUATAN (Hanya isi keterangan saja) ---
-        if keterangan and armada_idx == 0 and not sopir and not nopol:
-            # Tetap sah disimpan ke manifes jalan, data armada dirangkai dari keterangan saja
-            armada_full = f"{keterangan}"
+        if keterangan and armada_idx == 0 and not nopol and not sopir:
             dict_update = {
                 'no_polisi': "",
                 'nama_sopir': "",
                 'jenis_truk': "",
-                'nama_armada': armada_full,
+                'nama_armada': keterangan,
                 'ket_armada': keterangan
             }
-
-        # --- KONDISI 2: MODE ARMADA RESMI (Pilih jenis truk & isi sopir) ---
         elif armada_idx > 0:
-            # Rule: Sopir Wajib jika jenis truk dipilih
-            if not sopir:
-                QMessageBox.warning(self, "Peringatan", "Nama Sopir wajib diisi jika jenis armada dipilih!")
-                self.txt_sopir.setFocus()
+            if self.cb_jenis_truk.currentText().strip() == "Lainnya..." and not armada_text:
+                QMessageBox.warning(self, "Peringatan", "Jenis truk lainnya wajib diisi!")
+                self.txt_jenis_truk_lain.setFocus()
                 return
 
-            nopol_val = nopol if nopol else "-"
-            armada_full = f"{armada_text} - {nopol_val} - {sopir}"
+            # Saat jenis armada dipilih, minimal No. Polisi ATAU Nama Sopir harus tersedia.
+            # Jika hanya Nama Sopir yang tersedia, Manifest tetap disimpan tetapi
+            # tidak membuat Master Armada karena identitas kendaraan belum diketahui.
+            if not nopol and not sopir:
+                QMessageBox.warning(
+                    self,
+                    "Peringatan",
+                    "Isi minimal No. Polisi atau Nama Sopir jika jenis armada dipilih!"
+                )
+                self.txt_no_pol.setFocus()
+                return
+
+            nopol_val = nopol if nopol else "BELUM DIKETAHUI"
+            sopir_val = sopir if sopir else "BELUM ADA SOPIR"
+            armada_full = f"{armada_text} - {nopol_val} - {sopir_val}"
             if keterangan:
                 armada_full += f" ({keterangan})"
 
             dict_update = {
-                'no_polisi': nopol,  # Nopol bisa kosong/menyusul sesuai skenario baru
+                'no_polisi': nopol,
                 'nama_sopir': sopir,
                 'jenis_truk': armada_text,
                 'nama_armada': armada_full,
                 'ket_armada': keterangan
             }
-
-        # --- KONDISI 3: BELUM MENGISI APA-APA / SALAH INPUT ---
         else:
-            QMessageBox.warning(self, "Peringatan",
-                                "Mohon isi Keterangan (untuk titip muatan) ATAU pilih Jenis Armada & Nama Sopir!")
+            QMessageBox.warning(
+                self,
+                "Peringatan",
+                "Isi Keterangan untuk titip ekspedisi, atau pilih Jenis Armada lalu isi No. Polisi/Nama Sopir!"
+            )
             return
 
-        # Kirim payload ke database service
-        sukses, err = db_service.simpan_atau_update_manifest_data(m_id, CURRENT_SESSION.get('kode_cabang', 'PUSAT'),
-                                                                  dict_update, resi, self.is_edit_mode,
-                                                                  QDate.currentDate().toString("yyyy-MM-dd"))
+        sukses, err = db_service.simpan_atau_update_manifest_data(
+            m_id,
+            CURRENT_SESSION.get('kode_cabang', 'PUSAT'),
+            dict_update,
+            resi,
+            self.is_edit_mode,
+            QDate.currentDate().toString("yyyy-MM-dd")
+        )
+
         if sukses:
-            QMessageBox.information(self, "Sukses", "Manifest Berhasil diproses!")
+            QMessageBox.information(self, "Sukses", "Manifest berhasil diproses!")
+            self.setup_autocomplete_armada()
+
             if self.is_edit_mode:
                 self.batal_edit()
             else:
                 self.cb_jenis_truk.setCurrentIndex(0)
+                self.txt_jenis_truk_lain.clear()
                 self.txt_no_pol.clear()
                 self.txt_sopir.clear()
                 self.txt_keterangan.clear()
                 self.load_data_resi_gudang()
+                self.generate_no_manifest()
+                self.refresh_tahun_filter()
+                self.load_histori()
         else:
-            QMessageBox.critical(self, "Error", f"Gagal: {err}")
+            QMessageBox.critical(self, "Error", f"Gagal memproses manifest:\n{err}")
 
     def preview_histori_manifest(self, item):
         if item.parent():
             teks_info = item.text(1)
             parts = teks_info.split(" | ")
             m_id = parts[0].strip()
-            # Handle saat armada tidak ada
             if len(parts) > 1:
                 armada = parts[1].split(" (")[0].strip()
             else:
@@ -447,50 +535,95 @@ class TabManifest(QWidget):
 
     def siapkan_dan_cetak_dari_id(self, m_id, armada):
         try:
-            data = db_service.ambil_resi_detail_untuk_cetak(CURRENT_SESSION.get('kode_cabang', 'PUSAT'),
-                                                            db_service.ambil_resi_list_by_manifest(m_id,
-                                                                                                   CURRENT_SESSION.get(
-                                                                                                       'kode_cabang',
-                                                                                                       'PUSAT')))
-            # Jika armada string kosong, ubah jadi "-" agar rapi di kertas struk cetak
+            data = db_service.ambil_resi_detail_untuk_cetak(
+                CURRENT_SESSION.get('kode_cabang', 'PUSAT'),
+                db_service.ambil_resi_list_by_manifest(m_id, CURRENT_SESSION.get('kode_cabang', 'PUSAT'))
+            )
+
+            items_cetak = []
+            for r in data:
+                items_cetak.append((
+                    r[0], r[1], r[2],
+                    r[3].split(" - ")[-1] if " - " in r[3] else r[3],
+                    r[4],
+                    format_angka_indonesia(r[5], kosong_jika_nol=True, nilai_kosong="-"),
+                    format_angka_indonesia(r[6], kosong_jika_nol=True, nilai_kosong="-"),
+                    format_angka_indonesia(r[7], kosong_jika_nol=True, nilai_kosong="-")
+                ))
+
             cetak_manifest_ke_printer(
                 {'no_manifest': m_id, 'armada': armada if armada else "-",
                  'tanggal': QDate.currentDate().toString("dd/MM/yyyy"),
-                 'items': [
-                     (r[0], r[1], r[2], r[3].split(" - ")[-1] if " - " in r[3] else r[3], r[4], self.format_angka(r[5]),
-                      self.format_angka(r[6]), self.format_angka(r[7], "cbm")) for r in data]}, self)
+                 'items': items_cetak}, self)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Gagal cetak: {e}")
 
     def showEvent(self, event):
         super().showEvent(event)
-
+        terapkan_popup_combobox_bawah(self)
         self.load_data_resi_gudang()
         self.generate_no_manifest()
-
-        # Autocomplete sudah dibuat satu kali saat init_ui().
 
     def sesuaikan_tema_lokal(self):
         win = self.window()
         is_dark = win.current_theme == "dark" if win and hasattr(win, 'current_theme') else False
-        styles = get_manifest_styles(is_dark, self.is_edit_mode,
-                                     int(QSettings("AplikasiEkspedisi", "PengaturanUI").value("zoom_TabManifest", 0)))
-        self.panel_kiri.setStyleSheet(styles['panel_kiri']);
-        self.panel_kanan.setStyleSheet(styles['panel_kanan'])
-        self.lbl_title.setStyleSheet(styles['lbl_title']);
-        self.btn_proses.setStyleSheet(styles['btn_proses'])
-        self.list_histori.setStyleSheet(styles['list_histori']);
-        self.tabel_manifest.setStyleSheet(styles['style_tabel'])
 
-        # Tambahkan txt_keterangan ke daftar yang disesuaikan temanya
-        for w in [self.txt_no_manifest, self.txt_no_pol, self.txt_sopir, self.txt_keterangan, self.cb_filter_wilayah,
-                  self.cb_jenis_truk, self.cb_tahun_filter, self.txt_cari_histori]:
-            w.setStyleSheet(styles['style_input'])
+        z = zoom_helper.dapatkan_zoom_level(self.__class__.__name__)
+        font_statis = get_global_font_sizes(0)
+        font_dinamis = get_global_font_sizes(z)
 
+        styles_statis = get_manifest_styles(is_dark, self.is_edit_mode, 0)
+        styles_dinamis = get_manifest_styles(is_dark, self.is_edit_mode, z)
+
+        self.panel_kiri.setStyleSheet(styles_statis['panel_kiri'])
+        self.panel_kanan.setStyleSheet(styles_statis['panel_kanan'])
+        self.lbl_title.setStyleSheet(styles_statis['lbl_title'])
+        self.btn_proses.setStyleSheet(styles_statis['btn_proses'])
+
+        for w in [self.txt_no_manifest, self.txt_jenis_truk_lain, self.txt_no_pol, self.txt_sopir,
+                  self.txt_keterangan, self.cb_filter_wilayah, self.cb_jenis_truk,
+                  self.cb_tahun_filter, self.txt_cari_histori]:
+            w.setStyleSheet(styles_statis['style_input'])
+
+        # Integrasi tabel responsif
+        self.tabel_manifest.setStyleSheet(styles_dinamis['style_tabel'])
+
+        font = self.tabel_manifest.font()
+        font.setPointSize(font_dinamis["sz_base"])
+        self.tabel_manifest.setFont(font)
+
+        header_font = self.tabel_manifest.horizontalHeader().font()
+        header_font.setPointSize(font_dinamis["sz_base"])
+        self.tabel_manifest.horizontalHeader().setFont(header_font)
+        self.tabel_manifest.verticalHeader().setFont(header_font)
+
+        faktor = max(0.68, min(1.0 + (z * 0.08), 1.80))
+        tinggi_baris = max(24, int(32 * faktor))
+        self.tabel_manifest.verticalHeader().setDefaultSectionSize(tinggi_baris)
+
+        self.tabel_manifest.horizontalHeader().blockSignals(True)
+        zoom_helper._skalakan_kolom_tableview(self.tabel_manifest, z)
+        self.tabel_manifest.horizontalHeader().blockSignals(False)
+
+        # Histori Manifest responsif ke zoom
+        self.list_histori.setStyleSheet(styles_dinamis['list_histori'])
+        font_histori = self.list_histori.font()
+        font_histori.setPointSize(font_dinamis["sz_base"])
+        self.list_histori.setFont(font_histori)
 
     def simpan_lebar_kolom(self, t):
-        QSettings("EkspedisiApp", "TabManifest").setValue("lebar_kolom",
-                                                          [t.columnWidth(i) for i in range(t.columnCount())])
+        z = zoom_helper.dapatkan_zoom_level(self.__class__.__name__)
+        faktor = max(0.68, min(1.0 + (z * 0.08), 1.80))
+
+        lebar_dasar = []
+        for i in range(t.columnCount()):
+            lebar_asli = int(t.columnWidth(i) / faktor)
+            lebar_dasar.append(lebar_asli)
+
+            if hasattr(t, "_zoom_base_column_widths"):
+                t._zoom_base_column_widths[i] = lebar_asli
+
+        QSettings("EkspedisiApp", "TabManifest").setValue("lebar_kolom", lebar_dasar)
 
     def load_lebar_kolom(self, t):
         w = QSettings("EkspedisiApp", "TabManifest").value("lebar_kolom")
@@ -498,22 +631,14 @@ class TabManifest(QWidget):
             for i, width in enumerate(w): t.setColumnWidth(i, int(width))
 
     def on_wilayah_changed(self):
-        self.batal_edit() if self.is_edit_mode else None;
-        self.generate_no_manifest();
+        if self.is_edit_mode:
+            self.batal_edit()
+        self.generate_no_manifest()
         self.load_data_resi_gudang()
-
-    def format_angka(self, value, jenis="bulat"):
-        try:
-            if value is None or str(value).strip() == "" or float(value) == 0: return "-"
-            return f"{float(value):,.2f}".replace(",", "X").replace(".", ",").replace("X",
-                                                                                      ".") if jenis == "cbm" else f"{int(float(value)):,}".replace(
-                ",", ".")
-        except:
-            return "-"
 
     def filter_histori(self, text):
         for i in range(self.list_histori.topLevelItemCount()):
-            p = self.list_histori.topLevelItem(i);
+            p = self.list_histori.topLevelItem(i)
             visible = False
             for j in range(p.childCount()):
                 match = text.lower() in p.child(j).text(1).lower()
@@ -529,7 +654,6 @@ class TabManifest(QWidget):
         act_edit = menu.addAction("✏️ Edit Workspace")
         action = menu.exec_(self.list_histori.mapToGlobal(pos))
 
-        # Handler data kosong
         teks_info = item.text(1)
         parts = teks_info.split(" | ")
         m_id = parts[0].strip()
@@ -541,52 +665,60 @@ class TabManifest(QWidget):
             self.aktifkan_mode_edit(m_id, armada)
 
     def aktifkan_mode_edit(self, m_id, armada_str):
-        self.is_edit_mode = True;
+        self.is_edit_mode = True
         self.edit_manifest_id = m_id
 
-        # Kembalikan data dari string ke input
-        if armada_str and armada_str.strip() and armada_str != "-":
-            parts = armada_str.split(" - ")
+        self.cb_jenis_truk.setCurrentIndex(0)
+        self.txt_jenis_truk_lain.clear()
+        self.txt_no_pol.clear()
+        self.txt_sopir.clear()
+        self.txt_keterangan.clear()
+
+        armada_bersih = str(armada_str or '').strip()
+        if armada_bersih and armada_bersih != "-":
+            parts = armada_bersih.split(" - ", 2)
+
             if len(parts) >= 3:
-                self.cb_jenis_truk.setCurrentText(parts[0])
-                self.txt_no_pol.setText(parts[1] if parts[1] != "-" else "")
+                jenis_text, nopol_text, sopir_ket = parts
+                self.set_jenis_truk_manifest(jenis_text.strip())
 
-                sopir_ket = parts[2]
-                if " (" in sopir_ket and sopir_ket.endswith(")"):
-                    s_parts = sopir_ket.split(" (")
-                    self.txt_sopir.setText(s_parts[0])
-                    self.txt_keterangan.setText(s_parts[1][:-1])  # Hapus tanda tutup kurung ')'
-                else:
-                    self.txt_sopir.setText(sopir_ket)
-                    self.txt_keterangan.clear()
+                nopol_text = nopol_text.strip()
+                if nopol_text not in ("-", "BELUM DIKETAHUI"):
+                    self.txt_no_pol.setText(nopol_text)
+
+                sopir_text = sopir_ket.strip()
+                keterangan_text = ""
+                if " (" in sopir_text and sopir_text.endswith(")"):
+                    sopir_text, keterangan_text = sopir_text.rsplit(" (", 1)
+                    keterangan_text = keterangan_text[:-1]
+
+                if sopir_text.strip() not in ("", "-", "BELUM ADA SOPIR"):
+                    self.txt_sopir.setText(sopir_text.strip())
+                if keterangan_text:
+                    self.txt_keterangan.setText(keterangan_text.strip())
             else:
-                self.cb_jenis_truk.setCurrentIndex(0)
-        else:
-            self.cb_jenis_truk.setCurrentIndex(0)
-            self.txt_no_pol.clear()
-            self.txt_sopir.clear()
-            self.txt_keterangan.clear()
+                self.txt_keterangan.setText(armada_bersih)
 
-        self.lbl_title.setText(f"✏️ Edit Manifest: {m_id}");
+        self.lbl_title.setText(f"✏️ Edit Manifest: {m_id}")
         self.txt_no_manifest.setText(m_id)
-        self.btn_proses.setText("💾 SIMPAN MANIFES");
-        self.btn_batal_edit.show();
-        self.sesuaikan_tema_lokal();
+        self.btn_proses.setText("💾 SIMPAN MANIFES")
+        self.btn_batal_edit.show()
+        self.sesuaikan_tema_lokal()
         self.load_data_resi_gudang()
 
     def batal_edit(self):
-        self.is_edit_mode = False;
+        self.is_edit_mode = False
         self.edit_manifest_id = ""
-        self.lbl_title.setText("📦 Pembuatan Manifes Pengiriman");
-        self.btn_proses.setText("⚡ BUAT MANIFES");
+        self.lbl_title.setText("📦 Pembuatan Manifes Pengiriman")
+        self.btn_proses.setText("⚡ BUAT MANIFES")
         self.btn_batal_edit.hide()
 
-        # Kosongkan semua form input
         self.cb_jenis_truk.setCurrentIndex(0)
-        self.txt_sopir.clear();
-        self.txt_no_pol.clear();
-        self.txt_keterangan.clear();
+        self.txt_jenis_truk_lain.clear()
+        self.txt_sopir.clear()
+        self.txt_no_pol.clear()
+        self.txt_keterangan.clear()
 
-        self.sesuaikan_tema_lokal();
-        self.generate_no_manifest();
+        self.sesuaikan_tema_lokal()
+        self.generate_no_manifest()
         self.load_data_resi_gudang()

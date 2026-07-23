@@ -1,5 +1,4 @@
-"""Stylesheet antarmuka Tab Invoice."""
-
+# themes/modules/invoice.py
 from __future__ import annotations
 
 from typing import Dict
@@ -76,6 +75,7 @@ def get_invoice_styles(
             f"font-size:{size_input}px;font-family:'{MASTER_FONT}';padding:6px;"
             f"background:{input_bg};color:{title_color};"
             f"border:1px solid {input_border};border-radius:4px;"
+            f"QAbstractItemView {{ background:{input_bg}; color:{title_color}; selection-background-color: #2563eb; }}"
         ),
         "tabel_histori": history_qss,
         "tabel_editor": editor_qss,
@@ -99,5 +99,10 @@ def get_invoice_styles(
             button_qss
             + "QPushButton{background:#0ea5e9;color:white;border:none;}"
             + "QPushButton:hover{background:#0284c7;}"
+        ),
+
+        "menu_cetak": (
+            f"QMenu {{ background-color: {input_bg}; color: {title_color}; border: 1px solid {input_border}; }}"
+            f"QMenu::item:selected {{ background-color: #2563eb; color: white; }}"
         ),
     }

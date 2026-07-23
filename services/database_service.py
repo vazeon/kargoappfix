@@ -1,12 +1,42 @@
 # services/database_service.py
 import sqlite3
 import json
+import logging
 import re
 import uuid
 from config import CURRENT_SESSION, DATA_CLIENT
 
+logger = logging.getLogger(__name__)
+
 # 🌟 SAKLAR UTAMA: Set ke True jika nanti sudah siap online ke Supabase
 USE_CLOUD = False
+
+
+# ==============================================================================
+# 🧯 ERROR TERSTRUKTUR
+# Dipakai supaya caller (mis. tab_resi.py) tidak perlu cocokkan string pesan
+# mentah dari SQLite untuk menentukan jenis kegagalan — cukup cek `.kode`.
+# ==============================================================================
+
+class KesalahanTransaksiResi(Exception):
+    """Error terstruktur untuk operasi simpan_transaksi_resi.
+
+    `kode` adalah penanda stabil yang aman dipakai UI untuk percabangan logic,
+    terpisah dari `pesan` (teks untuk ditampilkan ke user, boleh berubah
+    redaksinya kapan saja tanpa mematahkan logic caller).
+    """
+
+    def __init__(self, kode, pesan):
+        self.kode = kode
+        self.pesan = pesan
+        super().__init__(pesan)
+
+    def __str__(self):
+        return self.pesan
+
+
+KODE_RESI_DUPLIKAT = "RESI_DUPLIKAT"
+KODE_DB_ERROR = "DB_ERROR"
 
 
 # ==============================================================================
@@ -458,9 +488,24 @@ def simpan_transaksi_resi(data):
             conn = get_db_connection()
             cursor = conn.cursor()
 
+            # 0. Cegah No Resi duplikat SEBELUM insert dijalankan.
+            #    Sengaja dicek eksplisit, bukan mengandalkan IntegrityError dari SQLite,
+            #    karena statement di bawah sebelumnya pakai INSERT OR REPLACE — yang mana
+            #    SQLite tidak pernah melempar error untuk itu, ia diam-diam menimpa baris
+            #    lama. Makanya duplikat dicek manual dulu di sini.
+            cursor.execute(
+                "SELECT 1 FROM data_resi WHERE no_resi = ? AND kode_cabang = ? LIMIT 1",
+                (data['no_resi'], data['kode_cabang']),
+            )
+            if cursor.fetchone():
+                return False, KesalahanTransaksiResi(
+                    KODE_RESI_DUPLIKAT,
+                    "No Resi sudah ada di database cabang ini!",
+                )
+
             # 1. Simpan data utama resi
             cursor.execute("""
-                           INSERT OR REPLACE INTO data_resi (no_resi, kode_cabang, tanggal_masuk, pengirim, hp_pengirim,
+                           INSERT INTO data_resi (no_resi, kode_cabang, tanggal_masuk, pengirim, hp_pengirim,
                                                   alamat_pengirim, kota_asal, penerima, hp_penerima, alamat_penerima,
                                                   kota_tujuan, nama_barang, berat, koli, cbm,
                                                   ongkir_per_kg, ongkir_per_cbm, total_ongkir,
@@ -628,12 +673,27 @@ def simpan_transaksi_resi(data):
         except sqlite3.IntegrityError as e:
             if conn:
                 conn.rollback()
-            return False, f"IntegrityError: {e}"
+            pesan_asli = str(e)
+
+            # Jaring pengaman untuk race condition langka: dua penyimpanan
+            # bersamaan lolos pre-check di atas sebelum salah satunya commit.
+            if "no_resi" in pesan_asli.lower() and "data_resi" in pesan_asli.lower():
+                return False, KesalahanTransaksiResi(
+                    KODE_RESI_DUPLIKAT,
+                    "No Resi sudah ada di database cabang ini!",
+                )
+
+            logger.exception("IntegrityError saat menyimpan transaksi resi")
+            return False, KesalahanTransaksiResi(
+                KODE_DB_ERROR,
+                f"Gagal simpan karena aturan database.\n\nDetail error:\n{pesan_asli}",
+            )
 
         except Exception as e:
             if conn:
                 conn.rollback()
-            return False, str(e)
+            logger.exception("Gagal menyimpan transaksi resi")
+            return False, KesalahanTransaksiResi(KODE_DB_ERROR, f"Gagal simpan: {e}")
 
         finally:
             if conn:
@@ -927,6 +987,7 @@ def ambil_histori_manifest(kode_cabang, tahun_terpilih):
 
 
 def simpan_atau_update_manifest_data(manifest_id, kode_cabang, armada_payload, resi_list, is_edit_mode, tgl_k):
+
     if USE_CLOUD:
         pass
     else:
@@ -934,62 +995,91 @@ def simpan_atau_update_manifest_data(manifest_id, kode_cabang, armada_payload, r
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
 
-            # --- SINKRONISASI DATA KE MASTER ARMADA (JIKA VALID) ---
-            nopol = armada_payload.get('no_polisi', '').strip()
-            sopir = armada_payload.get('nama_sopir', '').strip()
-            jenis = armada_payload.get('jenis_truk', '').strip()
-            ket_armada = armada_payload.get('ket_armada', '').strip()
-            if not ket_armada:
-                ket_armada = "-"
+            nopol = str(armada_payload.get('no_polisi', '') or '').strip().upper()
+            sopir = str(armada_payload.get('nama_sopir', '') or '').strip().upper()
+            jenis = str(armada_payload.get('jenis_truk', '') or '').strip()
+            ket_armada = str(armada_payload.get('ket_armada', '') or '').strip().upper()
 
-            # Syarat masuk Master Armada: Harus ada Nopol DAN ada Nama Sopir (Bukan mode titip ekspedisi rekan)
-            if nopol and sopir:
-                # Cek apakah armada sudah ada di database
-                cursor.execute("SELECT 1 FROM armada WHERE no_polisi = ?", (nopol,))
-                ada = cursor.fetchone()
+            if nopol:
+                cursor.execute(
+                    "SELECT nama_sopir, jenis_truk, ket_armada FROM armada WHERE no_polisi = ?",
+                    (nopol,)
+                )
+                data_lama = cursor.fetchone()
 
-                if ada:
-                    # Jika ada, UPDATE agar No HP & Foto tidak hilang tertimpa kosong
+                if data_lama:
                     cursor.execute('''
-                        UPDATE armada 
-                        SET nama_sopir = ?, jenis_truk = ?, ket_armada = ?, updated_at = CURRENT_TIMESTAMP
+                        UPDATE armada
+                        SET nama_sopir = CASE
+                                WHEN TRIM(?) <> '' THEN ?
+                                ELSE nama_sopir
+                            END,
+                            jenis_truk = CASE
+                                WHEN TRIM(?) <> '' THEN ?
+                                ELSE jenis_truk
+                            END,
+                            ket_armada = CASE
+                                WHEN TRIM(?) <> '' THEN ?
+                                ELSE ket_armada
+                            END,
+                            is_synced = 0,
+                            updated_at = CURRENT_TIMESTAMP
                         WHERE no_polisi = ?
-                    ''', (sopir, jenis, ket_armada, nopol))
+                    ''', (
+                        sopir, sopir,
+                        jenis, jenis,
+                        ket_armada, ket_armada,
+                        nopol
+                    ))
                 else:
-                    # Jika belum ada, INSERT armada baru
+                    jenis_db = jenis if jenis else "BELUM DIKETAHUI"
                     cursor.execute('''
-                        INSERT INTO armada (no_polisi, nama_sopir, jenis_truk, hp_sopir, ket_armada, updated_at)
-                        VALUES (?, ?, ?, '-', ?, CURRENT_TIMESTAMP)
-                    ''', (nopol, sopir, jenis, ket_armada))
-            # -------------------------------------------------------
+                        INSERT INTO armada (
+                            no_polisi, nama_sopir, jenis_truk,
+                            hp_sopir, ket_armada, foto_armada,
+                            is_synced, updated_at
+                        )
+                        VALUES (?, ?, ?, '', ?, '', 0, CURRENT_TIMESTAMP)
+                    ''', (nopol, sopir, jenis_db, ket_armada))
 
-            # Jika dalam mode edit, reset dulu resi yang terikat dengan manifest ini sebelumnya
             if is_edit_mode:
                 cursor.execute(
-                    "UPDATE data_resi SET armada = NULL, status_resi = 'GUDANG', tanggal_keluar = NULL, no_manifest = NULL, ket_manifest = NULL WHERE no_manifest = ? AND kode_cabang = ?",
+                    "UPDATE data_resi "
+                    "SET armada = NULL, status_resi = 'GUDANG', tanggal_keluar = NULL, "
+                    "no_manifest = NULL, ket_manifest = NULL "
+                    "WHERE no_manifest = ? AND kode_cabang = ?",
                     (manifest_id, kode_cabang)
                 )
 
-            # Ikat data nama_armada dan ket_manifest yang diketik per-resi
-            nama_armada = armada_payload['nama_armada']
-            # resi_list berisi tuple (no_resi, ket_manifest)
+            nama_armada = str(armada_payload.get('nama_armada', '') or '').strip()
+            if not nama_armada:
+                raise ValueError("Detail armada/keterangan Manifest tidak boleh kosong.")
+
             for r_data in resi_list:
                 no_resi_item = r_data[0]
-                ket_manifest = r_data[1]
+                ket_manifest = r_data[1] if len(r_data) > 1 else ""
                 cursor.execute(
-                    "UPDATE data_resi SET armada = ?, status_resi = 'PERJALANAN', tanggal_keluar = ?, no_manifest = ?, ket_manifest = ? WHERE no_resi = ? AND kode_cabang = ?",
+                    "UPDATE data_resi "
+                    "SET armada = ?, status_resi = 'PERJALANAN', tanggal_keluar = ?, "
+                    "no_manifest = ?, ket_manifest = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE no_resi = ? AND kode_cabang = ?",
                     (nama_armada, tgl_k, manifest_id, ket_manifest, no_resi_item, kode_cabang)
                 )
+
+                if cursor.rowcount == 0:
+                    raise ValueError(f"Resi {no_resi_item} tidak ditemukan pada cabang {kode_cabang}.")
+
             conn.commit()
             return True, ""
         except Exception as e:
-            if conn: conn.rollback()
+            if conn:
+                conn.rollback()
             return False, str(e)
         finally:
             if conn:
                 conn.close()
-
 
 def ambil_resi_detail_untuk_cetak(kode_cabang, resi_list):
     if USE_CLOUD:
@@ -1021,6 +1111,146 @@ def ambil_resi_list_by_manifest(manifest_id, kode_cabang):
             rows = cursor.execute("SELECT no_resi FROM data_resi WHERE no_manifest = ? AND kode_cabang = ?",
                                   (manifest_id, kode_cabang)).fetchall()
             return [r[0] for r in rows]
+        finally:
+            if conn:
+                conn.close()
+
+
+# ==============================================================================
+# 🧾 TAB INVOICE (TAGIHAN & TEMPLATE JSON)
+# ==============================================================================
+
+def dapatkan_sequence_invoice_baru(prefix):
+    """Mendapatkan nomor urut invoice berikutnya berdasarkan prefix."""
+    if USE_CLOUD:
+        pass
+    else:
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            count = cursor.execute(
+                "SELECT COUNT(*) FROM invoice_header WHERE no_invoice LIKE ?",
+                (f"{prefix}%",)
+            ).fetchone()[0]
+            return int(count) + 1
+        except Exception as e:
+            logger.error(f"[Invoice] Gagal generate sequence: {e}")
+            return 1
+        finally:
+            if conn:
+                conn.close()
+
+
+def simpan_atau_update_invoice(header, items, is_update=False):
+    """Menyimpan invoice baru atau memperbarui invoice lama."""
+    if USE_CLOUD:
+        pass
+    else:
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+
+            from datetime import datetime
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            no_invoice = header["no_invoice"]
+
+            if is_update:
+                cursor.execute("""
+                    UPDATE invoice_header
+                    SET tanggal = ?, client = ?, tipe_invoice = ?, jenis_pajak = ?, subtotal = ?, 
+                        total_akhir = ?, status = ?, metadata_json = ?, template_version = ?, updated_at = ?
+                    WHERE no_invoice = ?
+                """, (
+                    header["tanggal"], header["client"], header["tipe_invoice"], header["jenis_pajak"],
+                    header["subtotal"], header["total_akhir"], header["status"], header["metadata_json"],
+                    header["template_version"], now, no_invoice
+                ))
+                # Hapus detail lama untuk diganti yang baru
+                cursor.execute("DELETE FROM invoice_detail WHERE no_invoice = ?", (no_invoice,))
+            else:
+                # Cek duplikasi
+                existing = cursor.execute("SELECT 1 FROM invoice_header WHERE no_invoice = ?", (no_invoice,)).fetchone()
+                if existing:
+                    return False, "Nomor invoice sudah digunakan."
+
+                cursor.execute("""
+                    INSERT INTO invoice_header
+                    (no_invoice, tanggal, client, tipe_invoice, jenis_pajak, subtotal, total_akhir, 
+                     status, created_at, metadata_json, template_version, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    no_invoice, header["tanggal"], header["client"], header["tipe_invoice"], header["jenis_pajak"],
+                    header["subtotal"], header["total_akhir"], header["status"], now, header["metadata_json"],
+                    header["template_version"], now
+                ))
+
+            # Insert detail item
+            for item in items:
+                cursor.execute("""
+                    INSERT INTO invoice_detail (no_invoice, nomor_urut, data_kolom, nominal_subtotal)
+                    VALUES (?, ?, ?, ?)
+                """, (no_invoice, item["nomor_urut"], item["data_kolom"], item["nominal"]))
+
+            conn.commit()
+            return True, "Sukses"
+
+        except Exception as e:
+            if conn: conn.rollback()
+            logger.error(f"[Invoice] Gagal simpan/update: {e}")
+            return False, str(e)
+        finally:
+            if conn:
+                conn.close()
+
+
+def ambil_histori_invoice(limit=300):
+    """Mengambil daftar histori invoice untuk tabel sebelah kiri."""
+    if USE_CLOUD:
+        pass
+    else:
+        conn = None
+        try:
+            conn = get_db_connection()
+            return conn.execute(
+                "SELECT no_invoice, tanggal, client, status FROM invoice_header ORDER BY id DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+        except Exception as e:
+            logger.error(f"[Invoice] Gagal ambil histori: {e}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
+
+def ambil_invoice_by_no(no_invoice):
+    """Membaca data lengkap invoice (header & detail) untuk ditampilkan ke editor."""
+    if USE_CLOUD:
+        pass
+    else:
+        conn = None
+        try:
+            conn = get_db_connection()
+            header = conn.execute(
+                "SELECT client, tipe_invoice, jenis_pajak, status, tanggal, metadata_json FROM invoice_header WHERE no_invoice = ?",
+                (no_invoice,)
+            ).fetchone()
+
+            if not header:
+                return None, None
+
+            details = conn.execute(
+                "SELECT data_kolom FROM invoice_detail WHERE no_invoice = ? ORDER BY nomor_urut ASC",
+                (no_invoice,)
+            ).fetchall()
+
+            return header, details
+        except Exception as e:
+            logger.error(f"[Invoice] Gagal baca detail invoice: {e}")
+            return None, None
         finally:
             if conn:
                 conn.close()
@@ -1330,30 +1560,60 @@ def pastikan_kolom_provinsi_master_penerima():
 # --- 📁 SUB-TAB: DATA ARMADA TRUK & SOPIR ---
 
 def simpan_atau_update_armada(db_name, no_polisi, nama_sopir, jenis_truk, hp_sopir, ket_armada, foto_armada=""):
-    """Menambah armada baru atau memperbarui profil supir truk kargo"""
+    '''Menambah atau memperbarui Armada berdasarkan nomor polisi tanpa menimpa data lama dengan nilai kosong.'''
     if not db_name:
         db_name = CURRENT_SESSION.get('db_name', 'database_cargo.db')
 
+    nopol = str(no_polisi or '').strip().upper()
+    sopir = str(nama_sopir or '').strip().upper()
+    jenis = str(jenis_truk or '').strip()
+    hp = str(hp_sopir or '').strip()
+    ket = str(ket_armada or '').strip().upper()
+    foto = str(foto_armada or '').strip()
+
+    if not nopol:
+        return False, "No. Polisi wajib diisi."
+    if not jenis:
+        return False, "Jenis truk wajib diisi."
+
     conn = None
     try:
-        # Menambahkan timeout 20 detik juga di sini
         conn = sqlite3.connect(db_name, timeout=20.0)
         cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute("SELECT 1 FROM armada WHERE no_polisi = ?", (nopol,))
+        ada = cursor.fetchone()
 
-        cursor.execute('''
-                INSERT OR REPLACE INTO armada (no_polisi, nama_sopir, jenis_truk, hp_sopir, foto_armada, ket_armada, is_synced, updated_at)
+        if ada:
+            cursor.execute('''
+                UPDATE armada
+                SET nama_sopir = CASE WHEN TRIM(?) <> '' THEN ? ELSE nama_sopir END,
+                    jenis_truk = CASE WHEN TRIM(?) <> '' THEN ? ELSE jenis_truk END,
+                    hp_sopir = CASE WHEN TRIM(?) <> '' THEN ? ELSE hp_sopir END,
+                    ket_armada = CASE WHEN TRIM(?) <> '' THEN ? ELSE ket_armada END,
+                    foto_armada = CASE WHEN TRIM(?) <> '' THEN ? ELSE foto_armada END,
+                    is_synced = 0,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE no_polisi = ?
+            ''', (sopir, sopir, jenis, jenis, hp, hp, ket, ket, foto, foto, nopol))
+        else:
+            cursor.execute('''
+                INSERT INTO armada (
+                    no_polisi, nama_sopir, jenis_truk, hp_sopir,
+                    ket_armada, foto_armada, is_synced, updated_at
+                )
                 VALUES (?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
-            ''', (no_polisi.strip().upper(), nama_sopir.strip().upper(), jenis_truk.strip(), hp_sopir.strip(),
-                  foto_armada.strip(), ket_armada.strip()))
+            ''', (nopol, sopir, jenis, hp, ket, foto))
 
         conn.commit()
+        return True, ""
     except Exception as e:
-        if conn: conn.rollback()
-        print(f"[Simpan Armada] Error: {e}")
+        if conn:
+            conn.rollback()
+        return False, str(e)
     finally:
         if conn:
             conn.close()
-
 
 def ambil_semua_armada(db_name=None):
     """Menampilkan list semua unit truk terdaftar di menu manajemen armada"""
@@ -1375,23 +1635,47 @@ def ambil_semua_armada(db_name=None):
 
 
 def migrasi_cek_kolom_armada():
-    """Memastikan kolom foto_armada tersedia di SQLite lokal saat inisialisasi awal"""
+    '''
+    Memastikan kolom pendukung Master Armada tersedia.
+
+    Database masih tahap trial, sehingga perubahan NOT NULL nama_sopir diterapkan melalui
+    database_manager.py saat database dibuat ulang. Fungsi ini tetap menjaga kompatibilitas
+    bila file database uji lama masih sempat dibuka.
+    '''
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("PRAGMA table_info(armada)")
-        columns = [info[1] for info in cursor.fetchall()]
+        info_kolom = cursor.fetchall()
+        columns = [info[1] for info in info_kolom]
+
+        if not columns:
+            return False
+
+        if 'ket_armada' not in columns:
+            cursor.execute("ALTER TABLE armada ADD COLUMN ket_armada TEXT")
+            if 'keterangan' in columns:
+                cursor.execute('''
+                    UPDATE armada
+                    SET ket_armada = keterangan
+                    WHERE TRIM(COALESCE(ket_armada, '')) = ''
+                      AND TRIM(COALESCE(keterangan, '')) <> ''
+                ''')
+
         if 'foto_armada' not in columns:
             cursor.execute("ALTER TABLE armada ADD COLUMN foto_armada TEXT")
+
         conn.commit()
+        return True
     except Exception as e:
-        if conn: conn.rollback()
+        if conn:
+            conn.rollback()
         print(f"[Migration Fallback] Info armada: {e}")
+        return False
     finally:
         if conn:
             conn.close()
-
 
 def ambil_semua_armada_full():
     """Menarik semua kolom data armada kargo terdaftar untuk di-render ke UI"""
@@ -1411,20 +1695,137 @@ def ambil_semua_armada_full():
             conn.close()
 
 
-def simpan_atau_update_armada_full(nopol, jenis, sopir, hp, ket, foto):
-    """Menyimpan unit armada baru atau melakukan update profil sopir"""
+def simpan_atau_update_armada_full(nopol, jenis, sopir, hp, ket, foto, mode="TAMBAH"):
+    '''
+    Menyimpan Master Armada dari tab Armada.
+
+    - TAMBAH: menolak nomor polisi yang sudah ada agar tidak overwrite diam-diam.
+    - EDIT: memperbarui baris terpilih; nama sopir boleh kosong.
+    '''
+    nopol = str(nopol or '').strip().upper()
+    jenis = str(jenis or '').strip()
+    sopir = str(sopir or '').strip().upper()
+    hp = str(hp or '').strip()
+    ket = str(ket or '').strip().upper()
+    foto = str(foto or '').strip()
+    mode = str(mode or 'TAMBAH').strip().upper()
+
+    if not nopol:
+        return False, "No. Polisi wajib diisi."
+    if not jenis:
+        return False, "Jenis truk wajib diisi."
+
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO armada (no_polisi, jenis_truk, nama_sopir, hp_sopir, ket_armada, foto_armada, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ''', (nopol, jenis, sopir, hp, ket, foto))
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute("SELECT 1 FROM armada WHERE no_polisi = ?", (nopol,))
+        ada = cursor.fetchone() is not None
+
+        if mode == 'TAMBAH':
+            if ada:
+                conn.rollback()
+                return False, f"No. Polisi {nopol} sudah terdaftar. Gunakan menu Edit untuk memperbarui data."
+
+            cursor.execute('''
+                INSERT INTO armada (
+                    no_polisi, jenis_truk, nama_sopir, hp_sopir,
+                    ket_armada, foto_armada, is_synced, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+            ''', (nopol, jenis, sopir, hp, ket, foto))
+
+        elif mode == 'EDIT':
+            if not ada:
+                conn.rollback()
+                return False, f"Data Armada {nopol} tidak ditemukan."
+
+            cursor.execute('''
+                UPDATE armada
+                SET jenis_truk = ?,
+                    nama_sopir = ?,
+                    hp_sopir = ?,
+                    ket_armada = ?,
+                    foto_armada = ?,
+                    is_synced = 0,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE no_polisi = ?
+            ''', (jenis, sopir, hp, ket, foto, nopol))
+        else:
+            conn.rollback()
+            return False, f"Mode penyimpanan Armada tidak dikenal: {mode}"
+
         conn.commit()
+        return True, ""
     except Exception as e:
-        if conn: conn.rollback()
-        print(f"[Simpan Armada Full] Error: {e}")
+        if conn:
+            conn.rollback()
+        return False, str(e)
     finally:
         if conn:
             conn.close()
+
+
+# ==============================================================================
+# ⚙️ TAB SETTING SISTEM
+# ==============================================================================
+
+def ambil_semua_data_cabang(limit=10):
+    """Mengambil daftar kantor cabang dari database."""
+    if USE_CLOUD:
+        pass
+    else:
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT kode_cabang, nama_cabang, resi_prefix, start_seq_json, aturan_prefix FROM data_cabang LIMIT ?",
+                (limit,)
+            )
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"[Setting] Gagal ambil data cabang: {e}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
+
+def simpan_semua_pengaturan_dan_cabang(settings_to_save, branches_to_save):
+    """Menyimpan seluruh konfigurasi sistem dan data cabang secara atomic."""
+    if USE_CLOUD:
+        pass
+    else:
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+
+            # 1. Simpan Pengaturan Sistem
+            for kunci, nilai in settings_to_save:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO pengaturan_sistem (kunci, nilai) VALUES (?, ?)",
+                    (kunci, nilai)
+                )
+
+            # 2. Simpan Data Cabang
+            for b in branches_to_save:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO data_cabang 
+                    (kode_cabang, nama_cabang, resi_prefix, start_seq_json, aturan_prefix)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (b['kode_cabang'], b['nama_cabang'], b['resi_prefix'], b['start_seq_json'], b['aturan_prefix']))
+
+            conn.commit()
+            return True, "Sukses"
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"[Setting] Gagal simpan pengaturan: {e}")
+            return False, str(e)
+        finally:
+            if conn:
+                conn.close()

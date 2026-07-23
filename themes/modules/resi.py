@@ -1,9 +1,4 @@
-"""Style khusus tab Resi.
-
-Seluruh definisi warna, QSS, dan style dinamis milik TabResi ditempatkan
-pada modul ini agar file tab hanya menangani logika dan penerapan style.
-"""
-
+# themes/modules/resi.py
 from utils.typography import MASTER_FONT, get_global_font_sizes
 
 from themes.scrollbar import get_scrollbar_style

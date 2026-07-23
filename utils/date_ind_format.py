@@ -1,99 +1,130 @@
 # utils/date_ind_format.py
-from contextlib import contextmanager
-from typing import Any, Iterator
+from datetime import date, datetime
+from typing import Any, Optional
+
 from PyQt5.QtWidgets import QLineEdit
 
-
-@contextmanager
-def _blokir_signal_sementara(widget: Any) -> Iterator[None]:
-    """
-    Memblokir signal widget untuk sementara saat memanipulasi teks
-    agar tidak memicu infinite loop pada event textChanged.
-    """
-    status_sebelumnya = widget.blockSignals(True)
-    try:
-        yield
-    finally:
-        widget.blockSignals(status_sebelumnya)
+from .widget_helpers import blokir_signal_sementara
 
 
 def _ambil_digit(nilai: Any) -> str:
-    """Mengambil karakter angka/digit saja dari sebuah string."""
-    return "".join(karakter for karakter in str(nilai) if karakter.isdigit())
+    """Mengambil karakter digit dari suatu nilai."""
+    return "".join(
+        karakter
+        for karakter in str(nilai)
+        if karakter.isdigit()
+    )
+
+
+def _parse_tanggal(nilai: Any) -> Optional[date]:
+    """Mengubah nilai tanggal umum menjadi objek ``date`` jika valid."""
+    if isinstance(nilai, datetime):
+        return nilai.date()
+
+    if isinstance(nilai, date):
+        return nilai
+
+    # Mendukung QDate tanpa menjadikan modul ini bergantung langsung pada QDate.
+    if hasattr(nilai, "isValid") and hasattr(nilai, "toString"):
+        try:
+            if nilai.isValid():
+                teks_qdate = nilai.toString("yyyy-MM-dd")
+                return datetime.strptime(teks_qdate, "%Y-%m-%d").date()
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+    teks = str(nilai or "").strip()
+    if not teks:
+        return None
+
+    # Buang komponen waktu dari format SQL/ISO.
+    teks_tanggal = teks.split("T", 1)[0].split(" ", 1)[0].strip()
+
+    for pola in (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+    ):
+        try:
+            return datetime.strptime(teks_tanggal, pola).date()
+        except ValueError:
+            continue
+
+    return None
 
 
 def format_input_tanggal(edit_widget: QLineEdit) -> None:
     """
-    Slot untuk QLineEdit agar otomatis menambahkan garis miring (/)
-    saat user mengetik angka. Format akhir: DD/MM/YYYY.
-    """
-    text = edit_widget.text()
+    Memformat input angka pada ``QLineEdit`` menjadi DD/MM/YYYY.
 
-    # Ambil digitnya saja dan batasi maksimal 8 angka (DDMMYYYY)
-    angka_saja = _ambil_digit(text)[:8]
+    Fungsi ini aman dipasang pada signal ``textChanged`` karena signal
+    diblokir sementara ketika teks widget diperbarui.
+    """
+    teks_lama = edit_widget.text()
+    angka_saja = _ambil_digit(teks_lama)[:8]
 
     if not angka_saja:
-        with _blokir_signal_sementara(edit_widget):
+        with blokir_signal_sementara(edit_widget):
             edit_widget.clear()
         return
 
-    # Susun format DD/MM/YYYY
-    text_baru = ""
-    for i, char in enumerate(angka_saja):
-        if i == 2 or i == 4:
-            text_baru += "/"
-        text_baru += char
+    bagian = [angka_saja[:2]]
+    if len(angka_saja) > 2:
+        bagian.append(angka_saja[2:4])
+    if len(angka_saja) > 4:
+        bagian.append(angka_saja[4:8])
 
-    # Jika tidak ada perubahan wujud, hentikan proses
-    if text == text_baru:
+    teks_baru = "/".join(bagian)
+    if teks_baru == teks_lama:
         return
 
-    pos_lama = edit_widget.cursorPosition()
-    panjang_lama = len(text)
+    posisi_lama = edit_widget.cursorPosition()
+    panjang_lama = len(teks_lama)
 
-    with _blokir_signal_sementara(edit_widget):
-        edit_widget.setText(text_baru)
-        panjang_baru = len(text_baru)
+    with blokir_signal_sementara(edit_widget):
+        edit_widget.setText(teks_baru)
+        panjang_baru = len(teks_baru)
+        posisi_baru = posisi_lama + panjang_baru - panjang_lama
 
-        # Kalkulasi penyesuaian kursor (saat garis miring otomatis bertambah/berkurang)
-        pos_baru = pos_lama + (panjang_baru - panjang_lama)
+        if panjang_baru < panjang_lama and teks_lama.endswith("/"):
+            posisi_baru -= 1
 
-        # Cegah kursor melompat aneh saat user menghapus garis miring (Backspace)
-        if panjang_baru < panjang_lama and text.endswith('/'):
-            pos_baru -= 1
-
-        edit_widget.setCursorPosition(max(0, min(pos_baru, panjang_baru)))
+        edit_widget.setCursorPosition(
+            max(0, min(posisi_baru, panjang_baru))
+        )
 
 
-def format_tanggal_ke_db(tgl_ui: str) -> str:
+def format_tanggal_ke_db(tgl_ui: Any) -> str:
     """
-    Konversi dari Layar ke Database.
-    Mengubah format 'DD/MM/YYYY' menjadi 'YYYY-MM-DD' (Standar Supabase/SQL).
+    Mengubah tanggal menjadi format database ``YYYY-MM-DD``.
+
+    Format yang didukung antara lain DD/MM/YYYY, DD-MM-YYYY,
+    YYYY-MM-DD, timestamp SQL, ISO datetime, ``date``, ``datetime``,
+    dan ``QDate``. Nilai yang tidak dikenali dikembalikan apa adanya.
     """
-    if not tgl_ui:
+    if tgl_ui is None or str(tgl_ui).strip() == "":
         return ""
 
-    parts = str(tgl_ui).replace("-", "/").split("/")
+    tanggal = _parse_tanggal(tgl_ui)
+    if tanggal is None:
+        return str(tgl_ui)
 
-    if len(parts) == 3:
-        return f"{parts[2]}-{parts[1]}-{parts[0]}"
-
-    return str(tgl_ui)
+    return tanggal.strftime("%Y-%m-%d")
 
 
-def format_tanggal_ke_ui(tgl_db: str) -> str:
+def format_tanggal_ke_ui(tgl_db: Any) -> str:
     """
-    Konversi dari Database ke Layar.
-    Mengubah format 'YYYY-MM-DD' atau 'YYYY-MM-DD HH:MM:SS'
-    menjadi 'DD/MM/YYYY' untuk ditampilkan di tabel/UI lokal.
+    Mengubah tanggal menjadi format tampilan Indonesia ``DD/MM/YYYY``.
+
+    Format database yang sudah memiliki komponen waktu akan diproses
+    dengan aman tanpa menggunakan slicing posisi karakter.
     """
-    if not tgl_db:
+    if tgl_db is None or str(tgl_db).strip() == "":
         return ""
 
-    # Buang komponen jam/waktu jika ada
-    parts = str(tgl_db).split(" ")[0].split("-")
+    tanggal = _parse_tanggal(tgl_db)
+    if tanggal is None:
+        return str(tgl_db)
 
-    if len(parts) == 3:
-        return f"{parts[2]}/{parts[1]}/{parts[0]}"
-
-    return str(tgl_db)
+    return tanggal.strftime("%d/%m/%Y")

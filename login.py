@@ -73,7 +73,6 @@ class LoginWindow(QWidget):
         btn_close = QPushButton("×", card_widget)
         btn_close.setObjectName("BtnCloseTop")
         btn_close.setFixedSize(28, 28)
-        btn_close.setCursor(Qt.PointingHandCursor)
         btn_close.clicked.connect(QApplication.instance().quit)
         top_bar_layout.addWidget(btn_close)
         card_layout.addLayout(top_bar_layout)
@@ -106,7 +105,6 @@ class LoginWindow(QWidget):
 
         btn_login = QPushButton("MASUK")
         btn_login.setObjectName("BtnEnter")
-        btn_login.setCursor(Qt.PointingHandCursor)
         btn_login.clicked.connect(self.handle_login)
         card_layout.addWidget(btn_login)
 

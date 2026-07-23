@@ -9,11 +9,13 @@ from PyQt5.QtWidgets import (
 )
 
 from config import CURRENT_SESSION
+
 import services.database_service as db_service
 
-# --- IMPORT UTILS YANG SUDAH DIPECAH (MODULAR) ---
+from themes.modules.kontak_armada import get_kontak_riwayat_styles, get_penerima_blacklist_colors
+
 from utils.number_formatters import format_ke_rupiah
-from utils.typography import MASTER_FONT
+from utils.typography import MASTER_FONT, get_global_font_sizes
 from utils.widget_helpers import paksa_kapital_lineedit as helper_paksa_kapital_lineedit
 from utils.mixins import ZoomTableMixin
 from utils.table_helper import buat_tabel_item
@@ -286,8 +288,9 @@ class SubTabPenerima(QWidget, ZoomTableMixin):
 
                 # Pewarnaan untuk pelanggan Blacklist
                 if status == "BLACKLIST":
-                    warna_bg = QColor("#7f1d1d") if is_dark else QColor("#fee2e2")
-                    warna_text = QColor("#ffffff") if is_dark else QColor("#991b1b")
+                    hex_bg, hex_fg = get_penerima_blacklist_colors(is_dark)
+                    warna_bg = QColor(hex_bg)
+                    warna_text = QColor(hex_fg)
 
                     for col in range(self.tabel_penerima.columnCount()):
                         item_tabel = self.tabel_penerima.item(baris, col)
@@ -433,37 +436,63 @@ class SubTabPenerima(QWidget, ZoomTableMixin):
     # ============================================================
 
     def sesuaikan_tema_lokal(self):
-        window = self.window()
-        is_dark = bool(window and hasattr(window, "current_theme") and window.current_theme == "dark")
+        win = self.window()
+        is_dark = win.current_theme == "dark" if win and hasattr(win, 'current_theme') else False
         z = zoom_helper.dapatkan_zoom_level("TabKontakArmada")
 
-        self.lbl_judul.setProperty("zoom_font_key", "sz_title")
-        self.lbl_judul_histori.setProperty("zoom_font_key", "sz_title")
+        # 💡 Mengambil styles dari module terpusat
+        st = get_kontak_riwayat_styles(is_dark)
 
-        if is_dark:
-            style_judul = "color: #ffffff; font-weight: bold;"
-            style_judul_histori = "color: #60a5fa; font-weight: bold;"
-            style_input = "background-color: #1d2024; color: white; border: 1px solid #4c525e; border-radius: 4px;"
-            style_panel = "QFrame#panelHistori { background-color: #1e293b; border-radius: 8px; border: 1px solid #334155; }"
-        else:
-            style_judul = "color: #1e293b; font-weight: bold;"
-            style_judul_histori = "color: #2563eb; font-weight: bold;"
-            style_input = "background-color: white; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 4px;"
-            style_panel = "QFrame#panelHistori { background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }"
+        # Terapkan Style
+        self.panel_kanan.setStyleSheet(st["panel"])
+        self._set_style_dasar_zoom(self.lbl_judul, st["judul"])
+        self._set_style_dasar_zoom(self.lbl_judul_histori, st["judul_histori"])
+        self._set_style_dasar_zoom(self.txt_cari, st["input"])
+        self._set_style_dasar_zoom(self.txt_cari_histori, st["input"])
 
-        self.panel_kanan.setStyleSheet(style_panel)
-        # 💡 Menggunakan metode _set_style_dasar_zoom dari Mixin
-        self._set_style_dasar_zoom(self.lbl_judul, style_judul)
-        self._set_style_dasar_zoom(self.lbl_judul_histori, style_judul_histori)
-        self._set_style_dasar_zoom(self.txt_cari, style_input)
-        self._set_style_dasar_zoom(self.txt_cari_histori, style_input)
+        # --- RESET MARGIN (ANTI-OVERFLOW) ---
+        self.layout().setContentsMargins(10, 10, 10, 10)
+        self.layout().setSpacing(0)
+        self.panel_kiri.layout().setContentsMargins(0, 0, 5, 0)
+        self.panel_kiri.layout().setSpacing(10)
+        self.panel_kanan.layout().setContentsMargins(10, 10, 10, 10)
+        self.panel_kanan.layout().setSpacing(10)
 
-        if hasattr(self.tabel_penerima, "_zoom_base_stylesheet"): delattr(self.tabel_penerima, "_zoom_base_stylesheet")
-        if hasattr(self.tabel_histori, "_zoom_base_stylesheet"): delattr(self.tabel_histori, "_zoom_base_stylesheet")
+        # Blokir signal tabel sebelum zoom agar lebar tabel tidak "lompat"
+        self.tabel_penerima.horizontalHeader().blockSignals(True)
+        self.tabel_histori.horizontalHeader().blockSignals(True)
 
         self._sedang_menerapkan_zoom = True
         try:
             zoom_helper.terapkan_zoom_semua_elemen(container_widget=self, z=z, is_dark=is_dark)
         finally:
             self._sedang_menerapkan_zoom = False
+            self.tabel_penerima.horizontalHeader().blockSignals(False)
+            self.tabel_histori.horizontalHeader().blockSignals(False)
+
+        # Paksa skala kolom tabel
+        zoom_helper._skalakan_kolom_tableview(self.tabel_penerima, z)
+        zoom_helper._skalakan_kolom_tableview(self.tabel_histori, z)
+
+        # --- KUNCI PAKSA INPUT PENCARIAN ---
+        ukuran_statis = int(get_global_font_sizes(0)["sz_input"])
+
+        font_cari_kiri = self.txt_cari.font()
+        font_cari_kiri.setPointSize(ukuran_statis)
+        self.txt_cari.setFont(font_cari_kiri)
+        self.txt_cari.setFixedHeight(30)
+        self.txt_cari.setFixedWidth(230)
+
+        font_cari_kanan = self.txt_cari_histori.font()
+        font_cari_kanan.setPointSize(ukuran_statis)
+        self.txt_cari_histori.setFont(font_cari_kanan)
+        self.txt_cari_histori.setFixedHeight(30)
+
+        # --- KUNCI MATI MARGIN LAYOUT ---
+        self.layout().setContentsMargins(15, 15, 15, 15)
+        self.layout().setSpacing(0)
+        self.panel_kiri.layout().setContentsMargins(0, 0, 5, 0)
+        self.panel_kiri.layout().setSpacing(10)
+        self.panel_kanan.layout().setContentsMargins(10, 10, 10, 10)
+        self.panel_kanan.layout().setSpacing(10)
 

@@ -1,5 +1,4 @@
-"""Style khusus tab Manifest."""
-
+# themes/modules/manifest.py
 from typing import Optional, Tuple
 
 from PyQt5.QtGui import QColor, QFont

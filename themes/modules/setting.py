@@ -1,5 +1,4 @@
 # themes/modules/setting.py
-
 from utils.typography import MASTER_FONT
 
 from themes.scrollbar import get_scrollbar_style

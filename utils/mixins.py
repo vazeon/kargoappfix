@@ -1,28 +1,71 @@
 # utils/mixins.py
-from PyQt5.QtCore import QSettings
+from typing import List, Optional, Sequence
+
+from PyQt5.QtWidgets import QTableView, QWidget
+
 import utils.zoom as zoom_helper
 
 
 class ZoomTableMixin:
-    """Mixin untuk mengotomatisasi kalkulasi lebar kolom saat di-zoom."""
+    """Mixin reusable untuk menyimpan lebar dasar kolom tabel saat zoom."""
 
-    def _faktor_zoom_aktif(self, zoom_key="TabKontakArmada") -> float:
-        zoom = zoom_helper.dapatkan_zoom_level(zoom_key)
-        return max(0.68, min(1.0 + (zoom * 0.08), 1.80))
+    def _zoom_key(self, zoom_key: Optional[str] = None) -> str:
+        """Menentukan key zoom tanpa mengikat mixin ke modul tertentu."""
+        if zoom_key:
+            return str(zoom_key).strip()
 
-    def _lebar_dasar_tabel(self, table, zoom_key="TabKontakArmada") -> list:
+        key_khusus = getattr(self, "ZOOM_KEY", None)
+        if key_khusus:
+            return str(key_khusus).strip()
+
+        return self.__class__.__name__
+
+    def _faktor_zoom_aktif(
+        self,
+        zoom_key: Optional[str] = None,
+    ) -> float:
+        zoom = zoom_helper.dapatkan_zoom_level(
+            self._zoom_key(zoom_key)
+        )
+        return max(
+            0.68,
+            min(1.0 + (zoom * 0.08), 1.80),
+        )
+
+    def _lebar_dasar_tabel(
+        self,
+        table: QTableView,
+        zoom_key: Optional[str] = None,
+    ) -> List[int]:
         faktor = self._faktor_zoom_aktif(zoom_key)
+
+        if hasattr(table, "columnCount"):
+            jumlah_kolom = int(table.columnCount())
+        else:
+            model = table.model()
+            jumlah_kolom = model.columnCount() if model is not None else 0
+
         return [
             max(20, round(table.columnWidth(index) / faktor))
-            for index in range(table.columnCount())
+            for index in range(jumlah_kolom)
         ]
 
-    def _perbarui_cache_lebar_zoom(self, table, widths: list) -> None:
+    def _perbarui_cache_lebar_zoom(
+        self,
+        table: QTableView,
+        widths: Sequence[int],
+    ) -> None:
         table._zoom_base_column_widths = {
-            index: width for index, width in enumerate(widths)
+            index: max(20, int(width))
+            for index, width in enumerate(widths)
         }
 
-    def _set_style_dasar_zoom(self, widget, stylesheet):
-        widget.setStyleSheet(stylesheet)
+    def _set_style_dasar_zoom(
+        self,
+        widget: QWidget,
+        stylesheet: str,
+    ) -> None:
+        widget.setStyleSheet(str(stylesheet or ""))
+
         if hasattr(widget, "_zoom_base_stylesheet"):
             delattr(widget, "_zoom_base_stylesheet")

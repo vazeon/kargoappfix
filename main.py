@@ -10,7 +10,8 @@ from PyQt5.QtCore import Qt, QSettings, QObject, QEvent, QTimer
 from PyQt5.QtGui import QColor, QFontDatabase, QFont
 
 from utils.typography import get_master_font
-from utils.placeholder_helpers import setup_placeholder_dinamis
+from utils.placeholder_helper import setup_placeholder_dinamis
+from utils.cursor_helper import terapkan_kursor_global
 
 from config import DATA_CLIENT, CURRENT_SESSION
 
@@ -147,23 +148,19 @@ class MainWindow(QMainWindow):
 
         self.btn_zoom_out = QPushButton("🔍-")
         self.btn_zoom_out.setFixedSize(40, 32)
-        self.btn_zoom_out.setCursor(Qt.PointingHandCursor)
         self.btn_zoom_out.clicked.connect(lambda: self.ubah_zoom(-1))
 
         self.btn_zoom_in = QPushButton("🔍+")
         self.btn_zoom_in.setFixedSize(40, 32)
-        self.btn_zoom_in.setCursor(Qt.PointingHandCursor)
         self.btn_zoom_in.clicked.connect(lambda: self.ubah_zoom(1))
 
         self.btn_theme = QPushButton(self)
         self.btn_theme.setFixedWidth(120)
         self.btn_theme.setFixedHeight(32)
-        self.btn_theme.setCursor(Qt.PointingHandCursor)
         self.btn_theme.clicked.connect(self.toggle_theme)
 
         self.btn_setting = QPushButton("⚙️")
         self.btn_setting.setFixedSize(40, 32)
-        self.btn_setting.setCursor(Qt.PointingHandCursor)
         self.btn_setting.setToolTip("Pengaturan Sistem (Super Admin)")
         self.btn_setting.clicked.connect(self.buka_dasbor_pengaturan)
 
@@ -566,6 +563,8 @@ if __name__ == "__main__":
 
     placeholder_manager = GlobalPlaceholderManager()
     app.installEventFilter(placeholder_manager)
+
+    terapkan_kursor_global(app)
 
     # 1. Daftarkan seluruh file font ke Qt.
     load_fonts()
