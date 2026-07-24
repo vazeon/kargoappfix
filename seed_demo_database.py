@@ -5,7 +5,6 @@ import os
 DB_NAME = "database_cargo.db"
 
 def generate_mahkota_environment():
-
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     print(f"📁 Database baru '{DB_NAME}' berhasil dibuat.")

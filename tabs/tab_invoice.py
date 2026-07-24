@@ -1123,7 +1123,7 @@ class TabInvoice(ZoomTableMixin, QWidget):
         try:
             from config import CURRENT_SESSION, muat_pengaturan_sistem
             pengaturan = muat_pengaturan_sistem()
-            prefix_inv = pengaturan.get("prefix_invoice", "INV-SYS")
+            prefix_inv = pengaturan.get("prefix_invoice", "INV")
             branch_code = CURRENT_SESSION.get("kode_cabang", "PUSAT").strip().upper()
         except ImportError:
             prefix_inv = "INV"

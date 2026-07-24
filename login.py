@@ -78,8 +78,8 @@ class LoginWindow(QWidget):
         card_layout.addLayout(top_bar_layout)
 
         # Ambil nama PT dinamis dari DATA_CLIENT
-        nama_pt = DATA_CLIENT.get("pt_nama", "SISTEM EKSPEDISI KARGO")
-        lbl_title = QLabel(nama_pt)
+        nama_perusahaan = DATA_CLIENT.get("nama_perusahaan", "SISTEM EKSPEDISI KARGO")
+        lbl_title = QLabel(nama_perusahaan)
         lbl_title.setAlignment(Qt.AlignCenter)
         lbl_title.setWordWrap(True)
         lbl_title.setStyleSheet(

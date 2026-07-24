@@ -101,28 +101,23 @@ def verifikasi_login_sistem(username_input, password_input):
 
     return False, None, None
 
-
-# =====================================================================
-# 4. FUNGSI PENGAMBIL DATA DINAMIS (100% WHITE-LABEL FALLBACK)
-# =====================================================================
-# =====================================================================
+# ============================================================
 # 4. DATA BAWAAN (DEFAULT WHITE-LABEL) & FUNGSI PENGAMBIL DATA
-# =====================================================================
+# ============================================================
 DEFAULT_CLIENT_DATA = {
     "nama_perusahaan": "PT EKSPEDISI KARGO",
-    "alamat": "JL. INDONESIA RAYA NO. 123, SURABAYA",
-    "telp": "0812-XXXX-XXXX / (021) 123456",
-    "logo_text_html": 'EXPEDISI <span class="logo-kargo">KARGO</span>',
+    "alamat_perusahaan": "JL. INDONESIA NO. 77, SURABAYA",
+    "telp_perusahaan": "0812-3456-7890 / (021) 123456",
+    "logo_text_html": 'EKSPEDISI KARGO',
     "rekening_nonpajak": ["BANK, 1234567890, NAMA PERORANGAN"],
     "rekening_pajak": ["BANK, 1234567890, PT NAMA PERUSAHAAN"],
     "format_resi_manual": False,
     "template_no_resi": "[PREFIX][COUNTER][SUFFIX]",
     "kode_akhiran_pajak": "-P",
-    "prefix_invoice": "INV-SYS",
+    "prefix_invoice": "INV",
     "provinsi_tujuan": ["PROVINSI A", "PROVINSI B", "PROVINSI C"]
 }
 
-# 💡 Variabel global hanya diisi data aman, tidak menembak DB saat di-import
 DATA_CLIENT = DEFAULT_CLIENT_DATA.copy()
 
 def muat_pengaturan_sistem():
@@ -137,18 +132,10 @@ def muat_pengaturan_sistem():
 
         if rows:
             db_data = dict(rows)
-            # Sinkronisasi key DB ke variabel memori
-            if 'pt_nama' in db_data:
-                hasil_db['pt_nama'] = db_data['pt_nama']
-                hasil_db['nama_perusahaan'] = db_data['pt_nama']
-            if 'alamat' in db_data:
-                hasil_db['alamat'] = db_data['alamat']
-                hasil_db['alamat_perusahaan'] = db_data['alamat']
-            if 'telp' in db_data:
-                hasil_db['telp'] = db_data['telp']
-                hasil_db['telp_perusahaan'] = db_data['telp']
-            if 'logo_text_html' in db_data:
-                hasil_db['logo_text_html'] = db_data['logo_text_html']
+            if 'nama_perusahaan' in db_data: hasil_db['nama_perusahaan'] = db_data['nama_perusahaan']
+            if 'alamat_perusahaan' in db_data: hasil_db['alamat_perusahaan'] = db_data['alamat_perusahaan']
+            if 'telp_perusahaan' in db_data: hasil_db['telp_perusahaan'] = db_data['telp_perusahaan']
+            if 'logo_text_html' in db_data: hasil_db['logo_text_html'] = db_data['logo_text_html']
 
             if 'rekening_pajak' in db_data: hasil_db['rekening_pajak'] = json.loads(db_data['rekening_pajak'])
             if 'rekening_nonpajak' in db_data: hasil_db['rekening_nonpajak'] = json.loads(db_data['rekening_nonpajak'])
@@ -163,5 +150,3 @@ def muat_pengaturan_sistem():
         print(f"ℹ️ Database belum siap, melewati proses sinkronisasi: {e}")
 
     return hasil_db
-
-# (Tidak ada lagi pemanggilan DATA_CLIENT = muat_pengaturan_sistem() di sini)

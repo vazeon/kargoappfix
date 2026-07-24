@@ -111,12 +111,23 @@ class TabSettingSistem(QWidget):
         layout.addWidget(lbl_title)
 
         # --- GROUP 1: IDENTITAS PERUSAHAAN ---
+        # --- GROUP 1: IDENTITAS PERUSAHAAN ---[cite: 5]
         self.group_pt = QGroupBox("Identitas Perusahaan (White-Label)")
         form_pt = QFormLayout(self.group_pt)
         self._init_form(form_pt)
-        self.txt_nama_pt = QLineEdit()
-        self.txt_nama_pt.setPlaceholderText("Contoh: PT MAHKOTA KARGO LOGISTIK")
-        form_pt.addRow("Nama Perusahaan:", self.txt_nama_pt)
+
+        self.txt_nama_perusahaan = QLineEdit()
+        self.txt_nama_perusahaan.setPlaceholderText("Contoh: PT CINTA SEJATI")
+
+        self.txt_alamat_perusahaan = QLineEdit()
+        self.txt_alamat_perusahaan.setPlaceholderText("Contoh: Jl. Indonesia No. 77, Surabaya")
+
+        self.txt_telp_perusahaan = QLineEdit()
+        self.txt_telp_perusahaan.setPlaceholderText("Contoh: 0812-3456-7890")
+
+        form_pt.addRow("Nama Perusahaan:", self.txt_nama_perusahaan)
+        form_pt.addRow("Alamat:", self.txt_alamat_perusahaan)
+        form_pt.addRow("Telepon:", self.txt_telp_perusahaan)
         layout.addWidget(self.group_pt)
 
         # --- 🌟 GROUP 2: BRANDING TEKS LOGO (SATU WARNA FLAT) 🌟 ---
@@ -657,13 +668,13 @@ class TabSettingSistem(QWidget):
     # LOAD & SIMPAN DATA (🎯 SEKARANG AMAN DI DALAM CLASS)
     # ─────────────────────────────────────────────────────────────────
     def load_current_settings(self):
-        # 🌟 SINKRON VARIABEL: Menggunakan keyword baru 'nama_perusahaan'
-        self.txt_nama_pt.setText(DATA_CLIENT.get('nama_perusahaan', DATA_CLIENT.get('pt_nama', '')))
+        self.txt_nama_perusahaan.setText(DATA_CLIENT.get('nama_perusahaan', ''))
+        self.txt_alamat_perusahaan.setText(DATA_CLIENT.get('alamat_perusahaan', ''))
+        self.txt_telp_perusahaan.setText(DATA_CLIENT.get('telp_perusahaan', ''))
         self.txt_template_resi.setText(DATA_CLIENT.get('template_no_resi', '[PREFIX][COUNTER][SUFFIX]'))
         self.txt_suffix_pajak.setText(DATA_CLIENT.get('kode_akhiran_pajak', '-P'))
         self.txt_db_path.setText(CURRENT_SESSION.get('db_name', 'database_cargo.db'))
 
-        # 🌟 LOAD LOGO: Hapus tag HTML jika ada data kotor sisa versi lama
         raw_logo = DATA_CLIENT.get('logo_text_html', 'EXPEDISI LOGISTIK')
         clean_logo = re.sub(r'<[^>]*>', '', raw_logo).strip()
         self.txt_logo_aplikasi.setText(clean_logo)
@@ -718,7 +729,7 @@ class TabSettingSistem(QWidget):
         if CURRENT_SESSION.get('role', 'ADMIN') != "SUPER_ADMIN":
             return
 
-        nama_pt = self.txt_nama_pt.text().strip().upper()
+        nama_perusahaan = self.txt_nama_perusahaan.text().strip().upper()
         template = self.txt_template_resi.text().strip()
         suffix = self.txt_suffix_pajak.text().strip().upper()
         db_path_input = self.txt_db_path.text().strip()
@@ -726,7 +737,7 @@ class TabSettingSistem(QWidget):
         # 🌟 AMBIL DATA LOGO SATU WARNA POLOS
         logo_input = self.txt_logo_aplikasi.text().strip().upper()
 
-        if not db_path_input or not nama_pt or not logo_input:
+        if not db_path_input or not nama_perusahaan or not logo_input:
             QMessageBox.warning(self, "Peringatan", "Nama Perusahaan, Teks Logo, and Path database wajib diisi!")
             return
 
@@ -755,8 +766,9 @@ class TabSettingSistem(QWidget):
 
         # 💡 SUSUN DATA SETTING
         settings_to_save = [
-            ('nama_perusahaan', nama_pt),
-            ('pt_nama', nama_pt),
+            ('nama_perusahaan', nama_perusahaan),
+            ('alamat_perusahaan', alamat_perusahaan),
+            ('telp_perusahaan', telp_perusahaan),
             ('logo_text_html', logo_input),
             ('template_no_resi', template),
             ('kode_akhiran_pajak', suffix),

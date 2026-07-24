@@ -291,9 +291,9 @@ class MainWindow(QMainWindow):
                 self.tab_resi_widget.auto_refresh_histori()
 
     def update_session_ui(self):
-        nama_pt = DATA_CLIENT.get('pt_nama', 'PT EKSPEDISI KARGO')
+        nama_perusahaan = DATA_CLIENT.get('nama_perusahaan', 'PT EKSPEDISI KARGO')
         nama_cabang = CURRENT_SESSION.get('nama_cabang', 'PUSAT')
-        self.setWindowTitle(f"{nama_pt} - {nama_cabang} - PANEL ADMIN v1.0")
+        self.setWindowTitle(f"{nama_perusahaan} - {nama_cabang} - PANEL ADMIN v1.0")
         self.lbl_info_cabang.setText(f"🏢 {nama_cabang}")
 
         if hasattr(self.tab_resi_widget, 'refresh_session_ui'):
