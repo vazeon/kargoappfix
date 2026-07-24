@@ -5,14 +5,6 @@ import os
 DB_NAME = "database_cargo.db"
 
 def generate_mahkota_environment():
-    """Menghapus DB lama dan membuat ulang khusus ekosistem Mahkota Kargo (100% Supabase-Ready)"""
-    if os.path.exists(DB_NAME):
-        try:
-            os.remove(DB_NAME)
-            print(f"🗑️ Database lama '{DB_NAME}' berhasil dihapus.")
-        except Exception as e:
-            print(f"⚠️ Gagal menghapus database: {e}")
-            return
 
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -23,7 +15,7 @@ def generate_mahkota_environment():
         cursor.execute('CREATE TABLE IF NOT EXISTS pengaturan_sistem (kunci TEXT PRIMARY KEY, nilai TEXT)')
 
         data_pengaturan = [
-            ('pt_name', 'PT MAHKOTA KARGO LOGISTIK'),
+            ('nama_perusahaan', 'PT MAHKOTA KARGO LOGISTIK'),
             ('rekening_pajak', '["BCA, 829 257 2980, PT MAHKOTA KARGO LOGISTIK"]'),
             ('rekening_nonpajak',
              '["MANDIRI, 141 001 991 2963, REGGY ANITA RIANDA", "BCA, 187 064 1628, REGGY ANITA RIANDA"]'),
@@ -126,9 +118,9 @@ def generate_mahkota_environment():
             id_manifest TEXT PRIMARY KEY,
             kode_cabang TEXT NOT NULL,
             tanggal DATE,
-            no_armada TEXT,
-            supir TEXT,
-            status_kirim TEXT,
+            no_polisi TEXT,
+            nama_sopir TEXT,
+            status_manifest TEXT,
             is_synced INTEGER DEFAULT 0,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (kode_cabang) REFERENCES data_cabang (kode_cabang)
