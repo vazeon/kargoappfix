@@ -19,13 +19,6 @@ USE_CLOUD = False
 # ==============================================================================
 
 class KesalahanTransaksiResi(Exception):
-    """Error terstruktur untuk operasi simpan_transaksi_resi.
-
-    `kode` adalah penanda stabil yang aman dipakai UI untuk percabangan logic,
-    terpisah dari `pesan` (teks untuk ditampilkan ke user, boleh berubah
-    redaksinya kapan saja tanpa mematahkan logic caller).
-    """
-
     def __init__(self, kode, pesan):
         self.kode = kode
         self.pesan = pesan
@@ -43,242 +36,66 @@ KODE_DB_ERROR = "DB_ERROR"
 # ⚙️ KONEKSI INTI & UTILITY SISTEM (GLOBAL)
 # ==============================================================================
 
-def get_db_connection():
-    db_name = CURRENT_SESSION.get('db_name', 'database_cargo.db')
-    # Tambahkan timeout 20 detik agar antrean query bisa menunggu
-    return sqlite3.connect(db_name, timeout=20.0)
+def get_db_connection(db_name=None):
+    """Membuka koneksi SQLite aktif dengan foreign key dan timeout."""
+    target_db = db_name or CURRENT_SESSION.get("db_name", "database_cargo.db")
+    conn = sqlite3.connect(str(target_db), timeout=20.0)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 def get_setting(key):
     """
-    Mengambil settingan dengan prioritas:
-    1. Cek di Database (Data custom user)
-    2. Jika TIDAK ada/error, ambil dari DATA_CLIENT (Config.py)
-    """
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT nilai FROM pengaturan_sistem WHERE kunci = ?", (key,))
-        row = cursor.fetchone()
-
-        # Prioritas 1: Jika ada di DB, kembalikan datanya
-        if row:
-            return row[0]
-
-    except Exception as e:
-        print(f"[Service] Gagal ambil setting {key}: {e}")
-        # Jika ada error database (tabel belum ada/locked), lanjut ke fallback
-    finally:
-        if conn:
-            conn.close()
-
-    # Prioritas 2: Fallback ke config.py
-    return DATA_CLIENT.get(key, "Data Tidak Ditemukan")
-
-
-def migrasi_hapus_unique_no_hp_master():
-    """
-    Menghapus constraint UNIQUE pada no_hp di master_pengirim dan master_penerima.
-    Ini penting agar no_hp boleh kosong, boleh sama, dan tidak mengganggu sinkronisasi Tab Resi <-> Master.
-    """
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("PRAGMA foreign_keys = OFF")
-
-        # ==========================================================
-        # MIGRASI master_pengirim
-        # ==========================================================
-        cursor.execute("""
-            SELECT sql
-            FROM sqlite_master
-            WHERE type = 'table'
-              AND name = 'master_pengirim'
-        """)
-        row_pengirim = cursor.fetchone()
-
-        if row_pengirim and row_pengirim[0]:
-            sql_pengirim = " ".join(row_pengirim[0].lower().split())
-            perlu_migrasi_pengirim = (
-                "no_hp text unique" in sql_pengirim
-                or "unique(no_hp" in sql_pengirim
-                or "unique (no_hp" in sql_pengirim
-            )
-
-            if perlu_migrasi_pengirim:
-                print("[Migrasi] Menghapus UNIQUE no_hp dari master_pengirim...")
-
-                cursor.execute("DROP TABLE IF EXISTS master_pengirim_backup_fix")
-                cursor.execute("""
-                    CREATE TABLE master_pengirim_backup_fix AS
-                    SELECT *
-                    FROM master_pengirim
-                """)
-
-                cursor.execute("DROP TABLE IF EXISTS master_pengirim")
-
-                cursor.execute("""
-                    CREATE TABLE master_pengirim (
-                        id_pengirim TEXT PRIMARY KEY,
-                        kode_cabang TEXT NOT NULL,
-                        nama TEXT,
-                        no_hp TEXT,
-                        kota TEXT,
-                        alamat TEXT,
-                        is_synced INTEGER DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-
-                cursor.execute("""
-                    INSERT OR IGNORE INTO master_pengirim (
-                        id_pengirim, kode_cabang, nama, no_hp, kota, alamat,
-                        is_synced, created_at, updated_at
-                    )
-                    SELECT
-                        id_pengirim,
-                        kode_cabang,
-                        nama,
-                        NULLIF(no_hp, ''),
-                        kota,
-                        alamat,
-                        COALESCE(is_synced, 0),
-                        COALESCE(created_at, CURRENT_TIMESTAMP),
-                        COALESCE(updated_at, CURRENT_TIMESTAMP)
-                    FROM master_pengirim_backup_fix
-                """)
-
-                cursor.execute("DROP TABLE IF EXISTS master_pengirim_backup_fix")
-
-        # ==========================================================
-        # MIGRASI master_penerima
-        # ==========================================================
-        cursor.execute("""
-            SELECT sql
-            FROM sqlite_master
-            WHERE type = 'table'
-              AND name = 'master_penerima'
-        """)
-        row_penerima = cursor.fetchone()
-
-        if row_penerima and row_penerima[0]:
-            sql_penerima = " ".join(row_penerima[0].lower().split())
-            perlu_migrasi_penerima = (
-                "no_hp text unique" in sql_penerima
-                or "unique(no_hp" in sql_penerima
-                or "unique (no_hp" in sql_penerima
-            )
-
-            if perlu_migrasi_penerima:
-                print("[Migrasi] Menghapus UNIQUE no_hp dari master_penerima...")
-
-                cursor.execute("DROP TABLE IF EXISTS master_penerima_backup_fix")
-                cursor.execute("""
-                    CREATE TABLE master_penerima_backup_fix AS
-                    SELECT *
-                    FROM master_penerima
-                """)
-
-                cursor.execute("DROP TABLE IF EXISTS master_penerima")
-
-                cursor.execute("""
-                    CREATE TABLE master_penerima (
-                        id_penerima TEXT PRIMARY KEY,
-                        kode_cabang TEXT NOT NULL,
-                        nama TEXT,
-                        no_hp TEXT,
-                        kota TEXT,
-                        alamat TEXT,
-                        total_transaksi INTEGER DEFAULT 0,
-                        pembayaran TEXT DEFAULT 'TF / INVOICE',
-                        status_tagihan TEXT DEFAULT 'NORMAL',
-                        is_synced INTEGER DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-
-                cursor.execute("""
-                    INSERT OR IGNORE INTO master_penerima (
-                        id_penerima, kode_cabang, nama, no_hp, kota, alamat,
-                        total_transaksi, pembayaran, status_tagihan,
-                        is_synced, created_at, updated_at
-                    )
-                    SELECT
-                        id_penerima,
-                        kode_cabang,
-                        nama,
-                        NULLIF(no_hp, ''),
-                        kota,
-                        alamat,
-                        COALESCE(total_transaksi, 0),
-                        COALESCE(pembayaran, 'TF / INVOICE'),
-                        COALESCE(status_tagihan, 'NORMAL'),
-                        COALESCE(is_synced, 0),
-                        COALESCE(created_at, CURRENT_TIMESTAMP),
-                        COALESCE(updated_at, CURRENT_TIMESTAMP)
-                    FROM master_penerima_backup_fix
-                """)
-
-                cursor.execute("DROP TABLE IF EXISTS master_penerima_backup_fix")
-
-        cursor.execute("PRAGMA foreign_keys = ON")
-        conn.commit()
-        return True
-
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"[Migrasi UNIQUE no_hp Master] Error: {e}")
-        return False
-
-    finally:
-        if conn:
-            conn.close()
-
-
-def inisialisasi_database():
-    """
-    Dijalankan HANYA SEKALI saat aplikasi pertama kali dibuka.
-    Memastikan constraint master data diperbaiki.
+    Mengambil satu pengaturan dari database.
+    Jika belum tersedia, gunakan DATA_CLIENT dari config.py.
     """
     try:
-        migrasi_hapus_unique_no_hp_master()
-        pastikan_kolom_provinsi_master_penerima()
-        print("[Init DB] Inisialisasi master data berhasil dilewati dengan aman.")
-    except Exception as e:
-        print(f"[Init DB] Error saat inisialisasi: {e}")
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT nilai FROM pengaturan_sistem WHERE kunci = ?",
+                (str(key),),
+            ).fetchone()
+            if row is not None:
+                return row[0]
+    except sqlite3.Error as exc:
+        logger.warning("[Setting] Gagal membaca %s: %s", key, exc)
 
+    return DATA_CLIENT.get(key, "")
 
 # ==============================================================================
 # 📋 TAB RESI (FORM INPUT SURAT JALAN & HISTORI HARIAN)
 # ==============================================================================
 
 def cari_histori_resi(keyword, kode_cabang):
-    """Digunakan untuk pencarian live di sidebar histori kanan Tab Resi"""
+    """Pencarian live histori resi pada cabang aktif."""
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            search_pattern = f"%{keyword}%"
-            cursor.execute("""
-                           SELECT no_resi, penerima
-                           FROM data_resi
-                           WHERE kode_cabang = ?
-                             AND (LOWER(no_resi) LIKE ? OR LOWER(pengirim) LIKE ? OR LOWER(penerima) LIKE ?)
-                           ORDER BY rowid DESC LIMIT 50
-                           """, (kode_cabang, search_pattern, search_pattern, search_pattern))
-            hasil = cursor.fetchall()
-            return hasil
-        finally:
-            if conn:
-                conn.close()
+        return []
+
+    keyword = str(keyword or "").strip().lower()
+    kode_cabang = str(
+        kode_cabang or CURRENT_SESSION.get("kode_cabang", "PUSAT")
+    ).strip().upper()
+
+    try:
+        with get_db_connection() as conn:
+            pattern = f"%{keyword}%"
+            return conn.execute(
+                """
+                SELECT no_resi, penerima
+                FROM data_resi
+                WHERE kode_cabang = ?
+                  AND (
+                      LOWER(COALESCE(no_resi, '')) LIKE ?
+                      OR LOWER(COALESCE(pengirim, '')) LIKE ?
+                      OR LOWER(COALESCE(penerima, '')) LIKE ?
+                  )
+                ORDER BY rowid DESC
+                LIMIT 50
+                """,
+                (kode_cabang, pattern, pattern, pattern),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.error("[Resi] Gagal mencari histori: %s", exc)
+        return []
 
 
 def ambil_histori_resi_by_tanggal(tgl_pilih, kode_cabang):
@@ -479,225 +296,267 @@ def ambil_sekuens_resi(kode_cabang, pref):
 
 
 def simpan_transaksi_resi(data):
-    """Menyimpan data resi baru & otomatis sinkron ke master_pengirim dan master_penerima"""
+    """Menyimpan resi, buku gudang, serta master pengirim/penerima dalam satu transaksi."""
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
+        return False, KesalahanTransaksiResi(
+            KODE_DB_ERROR,
+            "Penyimpanan cloud belum diaktifkan.",
+        )
 
-            # 0. Cegah No Resi duplikat SEBELUM insert dijalankan.
-            #    Sengaja dicek eksplisit, bukan mengandalkan IntegrityError dari SQLite,
-            #    karena statement di bawah sebelumnya pakai INSERT OR REPLACE — yang mana
-            #    SQLite tidak pernah melempar error untuk itu, ia diam-diam menimpa baris
-            #    lama. Makanya duplikat dicek manual dulu di sini.
-            cursor.execute(
-                "SELECT 1 FROM data_resi WHERE no_resi = ? AND kode_cabang = ? LIMIT 1",
-                (data['no_resi'], data['kode_cabang']),
-            )
-            if cursor.fetchone():
-                return False, KesalahanTransaksiResi(
-                    KODE_RESI_DUPLIKAT,
-                    "No Resi sudah ada di database cabang ini!",
-                )
+    no_resi = str(data.get("no_resi", "")).strip().upper()
+    kode_cabang = str(
+        data.get("kode_cabang")
+        or CURRENT_SESSION.get("kode_cabang", "PUSAT")
+    ).strip().upper()
 
-            # 1. Simpan data utama resi
-            cursor.execute("""
-                           INSERT INTO data_resi (no_resi, kode_cabang, tanggal_masuk, pengirim, hp_pengirim,
-                                                  alamat_pengirim, kota_asal, penerima, hp_penerima, alamat_penerima,
-                                                  kota_tujuan, nama_barang, berat, koli, cbm,
-                                                  ongkir_per_kg, ongkir_per_cbm, total_ongkir,
-                                                  pembayaran, status_resi, foto_bukti, rincian_json)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROSES', 'BELUM', ?)
-                           """, (
-                               data['no_resi'], data['kode_cabang'], data['tanggal_masuk'], data['pengirim'],
-                               data['hp_pengirim'], data['alamat_pengirim'], data['kota_asal'], data['penerima'],
-                               data['hp_penerima'], data['alamat_penerima'], data['kota_tujuan'], data['nama_barang'],
-                               data['berat'], data['koli'], data['cbm'], data['ongkir_per_kg'], data['ongkir_per_cbm'],
-                               data['total_ongkir'], data['pembayaran'], data['rincian_json']
-                           ))
+    if not no_resi:
+        return False, KesalahanTransaksiResi(
+            KODE_DB_ERROR,
+            "Nomor resi tidak boleh kosong.",
+        )
+    if not kode_cabang:
+        return False, KesalahanTransaksiResi(
+            KODE_DB_ERROR,
+            "Kode cabang tidak boleh kosong.",
+        )
 
-            # 2. Simpan / update buku gudang
-            cursor.execute(
-                "INSERT OR REPLACE INTO buku_gudang (id_gudang, kode_cabang, tanggal, no_resi, jenis, status_resi) VALUES (?, ?, ?, ?, 'BARANG MASUK', 'PROSES')",
-                (f"GDG-{data['no_resi']}", data['kode_cabang'], data['tanggal_masuk'], data['no_resi'])
-            )
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
 
-            kode_cabang = data.get('kode_cabang', CURRENT_SESSION.get('kode_cabang', 'PUSAT'))
-
-            # ==========================================================
-            # 3. SINKRONISASI KE master_pengirim
-            # Syarat simpan/update master hanya NAMA.
-            # no_hp, alamat, kota boleh kosong.
-            # ==========================================================
-            nama_pengirim = data.get('pengirim', '').strip().upper()
-            hp_pengirim = data.get('hp_pengirim', '').strip()
-            alamat_pengirim = data.get('alamat_pengirim', '').strip().upper()
-            kota_pengirim = data.get('kota_asal', '').strip().upper()
-
-            hp_pengirim_db = hp_pengirim if hp_pengirim else None
-
-            if nama_pengirim:
-                cursor.execute("""
-                    SELECT id_pengirim
-                    FROM master_pengirim
-                    WHERE TRIM(UPPER(nama)) = TRIM(UPPER(?))
-                      AND kode_cabang = ?
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                """, (nama_pengirim, kode_cabang))
-                exist_pengirim = cursor.fetchone()
-
-                if exist_pengirim:
-                    cursor.execute("""
-                        UPDATE master_pengirim
-                        SET nama = ?,
-                            no_hp = ?,
-                            alamat = ?,
-                            kota = ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE id_pengirim = ?
-                          AND kode_cabang = ?
-                    """, (
-                        nama_pengirim,
-                        hp_pengirim_db,
-                        alamat_pengirim,
-                        kota_pengirim,
-                        exist_pengirim[0],
-                        kode_cabang
-                    ))
-                else:
-                    id_baru_shp = f"SHP-{uuid.uuid4().hex[:6].upper()}"
-                    cursor.execute("""
-                        INSERT INTO master_pengirim (
-                            id_pengirim, kode_cabang, nama, no_hp, alamat, kota
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (
-                        id_baru_shp,
-                        kode_cabang,
-                        nama_pengirim,
-                        hp_pengirim_db,
-                        alamat_pengirim,
-                        kota_pengirim
-                    ))
-
-            # ==========================================================
-            # 4. SINKRONISASI KE master_penerima
-            # Syarat simpan/update master hanya NAMA.
-            # no_hp, alamat, kota boleh kosong.
-            # ==========================================================
-            nama_penerima = data.get('penerima', '').strip().upper()
-            hp_penerima = data.get('hp_penerima', '').strip()
-            alamat_penerima = data.get('alamat_penerima', '').strip().upper()
-
-            kota_tujuan = data.get('kota_tujuan', '')
-            kota_clean = kota_tujuan.split(" - ")[
-                -1].strip().upper() if " - " in kota_tujuan else kota_tujuan.strip().upper()
-
-            provinsi_clean = data.get('provinsi_tujuan', '').strip().upper()
-            if not provinsi_clean and " - " in kota_tujuan:
-                provinsi_clean = kota_tujuan.split(" - ")[0].strip().upper()
-
-            hp_penerima_db = hp_penerima if hp_penerima else None
-            provinsi_db = provinsi_clean if provinsi_clean else None
-
-            if nama_penerima:
-                cursor.execute("""
-                                SELECT id_penerima
-                                FROM master_penerima
-                                WHERE TRIM(UPPER(nama)) = TRIM(UPPER(?))
-                                  AND kode_cabang = ?
-                                ORDER BY updated_at DESC
-                                LIMIT 1
-                            """, (nama_penerima, data['kode_cabang']))
-                exist_penerima = cursor.fetchone()
-
-                # 🚀 HITUNG AKTUAL JUMLAH RESI YANG SUDAH TERINSERSI UNTUK USER INI
-                cursor.execute("""
-                                SELECT COUNT(*) FROM data_resi 
-                                WHERE TRIM(UPPER(penerima)) = TRIM(UPPER(?)) AND kode_cabang = ?
-                            """, (nama_penerima, data['kode_cabang']))
-                total_resi = cursor.fetchone()[0]
-
-                if not exist_penerima:
-                    id_baru_cne = f"CNE-{uuid.uuid4().hex[:6].upper()}"
-                    cursor.execute('''
-                                    INSERT INTO master_penerima (
-                                        id_penerima, kode_cabang, nama, no_hp, kota, provinsi, alamat,
-                                        total_transaksi, pembayaran
-                                    )
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                ''', (
-                        id_baru_cne,
-                        data['kode_cabang'],
-                        nama_penerima,
-                        hp_penerima_db,
-                        kota_clean,
-                        provinsi_db,
-                        alamat_penerima,
-                        total_resi,  # Simpan jumlah resi aktual
-                        data.get('pembayaran', 'TF / INVOICE')
-                    ))
-                else:
-                    # 🚀 UPDATE JUMLAH TRANSAKSI SAAT ADA RESI BARU MASUK
-                    cursor.execute('''
-                                    UPDATE master_penerima
-                                    SET nama       = ?,
-                                        no_hp      = ?,
-                                        kota       = ?,
-                                        provinsi   = ?,
-                                        alamat     = ?,
-                                        pembayaran = ?,
-                                        total_transaksi = ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE id_penerima = ?
-                                      AND kode_cabang = ?
-                                ''', (
-                        nama_penerima,
-                        hp_penerima_db,
-                        kota_clean,
-                        provinsi_db,
-                        alamat_penerima,
-                        data.get('pembayaran', 'TF / INVOICE'),
-                        total_resi,  # Update dengan jumlah total transaksi terbaru
-                        exist_penerima[0],
-                        data['kode_cabang']
-                    ))
-
-            conn.commit()
-            return True, ""
-
-        except sqlite3.IntegrityError as e:
-            if conn:
-                conn.rollback()
-            pesan_asli = str(e)
-
-            # Jaring pengaman untuk race condition langka: dua penyimpanan
-            # bersamaan lolos pre-check di atas sebelum salah satunya commit.
-            if "no_resi" in pesan_asli.lower() and "data_resi" in pesan_asli.lower():
-                return False, KesalahanTransaksiResi(
-                    KODE_RESI_DUPLIKAT,
-                    "No Resi sudah ada di database cabang ini!",
-                )
-
-            logger.exception("IntegrityError saat menyimpan transaksi resi")
+        # no_resi adalah primary key global pada schema.
+        if cursor.execute(
+            "SELECT 1 FROM data_resi WHERE no_resi = ? LIMIT 1",
+            (no_resi,),
+        ).fetchone():
+            conn.rollback()
             return False, KesalahanTransaksiResi(
-                KODE_DB_ERROR,
-                f"Gagal simpan karena aturan database.\n\nDetail error:\n{pesan_asli}",
+                KODE_RESI_DUPLIKAT,
+                "Nomor resi sudah ada di database.",
             )
 
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            logger.exception("Gagal menyimpan transaksi resi")
-            return False, KesalahanTransaksiResi(KODE_DB_ERROR, f"Gagal simpan: {e}")
+        cursor.execute(
+            """
+            INSERT INTO data_resi (
+                no_resi, kode_cabang, tanggal_masuk,
+                pengirim, hp_pengirim, alamat_pengirim, kota_asal,
+                penerima, hp_penerima, alamat_penerima, kota_tujuan,
+                nama_barang, berat, koli, cbm,
+                ongkir_per_kg, ongkir_per_cbm, total_ongkir,
+                pembayaran, status_resi, foto_bukti, rincian_json,
+                updated_at
+            )
+            VALUES (
+                ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?,
+                ?, 'DI GUDANG', 'BELUM', ?,
+                CURRENT_TIMESTAMP
+            )
+            """,
+            (
+                no_resi,
+                kode_cabang,
+                data.get("tanggal_masuk"),
+                str(data.get("pengirim", "")).strip().upper(),
+                str(data.get("hp_pengirim", "")).strip(),
+                str(data.get("alamat_pengirim", "")).strip().upper(),
+                str(data.get("kota_asal", "")).strip().upper(),
+                str(data.get("penerima", "")).strip().upper(),
+                str(data.get("hp_penerima", "")).strip(),
+                str(data.get("alamat_penerima", "")).strip().upper(),
+                str(data.get("kota_tujuan", "")).strip().upper(),
+                str(data.get("nama_barang", "")).strip().upper(),
+                data.get("berat", 0),
+                data.get("koli", ""),
+                data.get("cbm", 0),
+                data.get("ongkir_per_kg", 0),
+                data.get("ongkir_per_cbm", 0),
+                data.get("total_ongkir", 0),
+                str(data.get("pembayaran", "")).strip().upper(),
+                data.get("rincian_json", "[]"),
+            ),
+        )
 
-        finally:
-            if conn:
-                conn.close()
+        id_gudang = f"GDG-{no_resi}"
+        cursor.execute(
+            """
+            INSERT INTO buku_gudang (
+                id_gudang, kode_cabang, tanggal,
+                no_resi, jenis, status_resi, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'BARANG MASUK', 'DI GUDANG', CURRENT_TIMESTAMP)
+            ON CONFLICT(id_gudang) DO UPDATE SET
+                kode_cabang = excluded.kode_cabang,
+                tanggal = excluded.tanggal,
+                no_resi = excluded.no_resi,
+                jenis = excluded.jenis,
+                status_resi = excluded.status_resi,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (id_gudang, kode_cabang, data.get("tanggal_masuk"), no_resi),
+        )
+
+        nama_pengirim = str(data.get("pengirim", "")).strip().upper()
+        if nama_pengirim:
+            pengirim_lama = cursor.execute(
+                """
+                SELECT id_pengirim
+                FROM master_pengirim
+                WHERE kode_cabang = ?
+                  AND TRIM(UPPER(nama)) = TRIM(UPPER(?))
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (kode_cabang, nama_pengirim),
+            ).fetchone()
+
+            values_pengirim = (
+                nama_pengirim,
+                str(data.get("hp_pengirim", "")).strip() or None,
+                str(data.get("alamat_pengirim", "")).strip().upper(),
+                str(data.get("kota_asal", "")).strip().upper(),
+            )
+
+            if pengirim_lama:
+                cursor.execute(
+                    """
+                    UPDATE master_pengirim
+                    SET nama = ?, no_hp = ?, alamat = ?, kota = ?,
+                        is_synced = 0, updated_at = CURRENT_TIMESTAMP
+                    WHERE id_pengirim = ? AND kode_cabang = ?
+                    """,
+                    values_pengirim + (pengirim_lama[0], kode_cabang),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO master_pengirim (
+                        id_pengirim, kode_cabang, nama,
+                        no_hp, alamat, kota, is_synced
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 0)
+                    """,
+                    (
+                        f"SHP-{uuid.uuid4().hex[:12].upper()}",
+                        kode_cabang,
+                    ) + values_pengirim,
+                )
+
+        nama_penerima = str(data.get("penerima", "")).strip().upper()
+        if nama_penerima:
+            kota_tujuan = str(data.get("kota_tujuan", "")).strip().upper()
+            if " - " in kota_tujuan:
+                provinsi_dari_kota, kota_bersih = [
+                    bagian.strip()
+                    for bagian in kota_tujuan.split(" - ", 1)
+                ]
+            else:
+                provinsi_dari_kota = ""
+                kota_bersih = kota_tujuan
+
+            provinsi = (
+                str(data.get("provinsi_tujuan", "")).strip().upper()
+                or provinsi_dari_kota
+                or None
+            )
+            hp_penerima = str(data.get("hp_penerima", "")).strip() or None
+            alamat_penerima = (
+                str(data.get("alamat_penerima", "")).strip().upper()
+            )
+            pembayaran = (
+                str(data.get("pembayaran", "TF / INVOICE")).strip().upper()
+                or "TF / INVOICE"
+            )
+
+            penerima_lama = cursor.execute(
+                """
+                SELECT id_penerima
+                FROM master_penerima
+                WHERE kode_cabang = ?
+                  AND TRIM(UPPER(nama)) = TRIM(UPPER(?))
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (kode_cabang, nama_penerima),
+            ).fetchone()
+
+            total_transaksi = cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM data_resi
+                WHERE kode_cabang = ?
+                  AND TRIM(UPPER(penerima)) = TRIM(UPPER(?))
+                """,
+                (kode_cabang, nama_penerima),
+            ).fetchone()[0]
+
+            if penerima_lama:
+                cursor.execute(
+                    """
+                    UPDATE master_penerima
+                    SET nama = ?, no_hp = ?, alamat = ?, kota = ?,
+                        provinsi = ?, pembayaran = ?,
+                        total_transaksi = ?, is_synced = 0,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id_penerima = ? AND kode_cabang = ?
+                    """,
+                    (
+                        nama_penerima, hp_penerima, alamat_penerima,
+                        kota_bersih, provinsi, pembayaran,
+                        total_transaksi, penerima_lama[0], kode_cabang,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO master_penerima (
+                        id_penerima, kode_cabang, nama, no_hp,
+                        alamat, kota, provinsi, total_transaksi,
+                        pembayaran, is_synced
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    """,
+                    (
+                        f"CNE-{uuid.uuid4().hex[:12].upper()}",
+                        kode_cabang, nama_penerima, hp_penerima,
+                        alamat_penerima, kota_bersih, provinsi,
+                        total_transaksi, pembayaran,
+                    ),
+                )
+
+        conn.commit()
+        return True, ""
+
+    except sqlite3.IntegrityError as exc:
+        if conn:
+            conn.rollback()
+        message = str(exc)
+        if "data_resi.no_resi" in message:
+            return False, KesalahanTransaksiResi(
+                KODE_RESI_DUPLIKAT,
+                "Nomor resi sudah ada di database.",
+            )
+        logger.exception("IntegrityError saat menyimpan transaksi resi")
+        return False, KesalahanTransaksiResi(
+            KODE_DB_ERROR,
+            f"Gagal menyimpan karena aturan database: {message}",
+        )
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        logger.exception("Gagal menyimpan transaksi resi")
+        return False, KesalahanTransaksiResi(
+            KODE_DB_ERROR,
+            f"Gagal menyimpan resi: {exc}",
+        )
+    finally:
+        if conn:
+            conn.close()
 
 
 # ==============================================================================
@@ -762,69 +621,93 @@ def ambil_data_buku_gudang(kode_cabang, wilayah, tahun_terpilih, filters=None):
 
 
 def update_baris_buku_gudang(no_resi, kode_cabang, updates_dict, barang_payload=None):
+    """Memperbarui data resi dari tab buku gudang dengan kolom yang diizinkan."""
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
+        return False
 
-            if updates_dict:
-                fields = [f"{k} = ?" for k in updates_dict.keys()]
-                values = list(updates_dict.values())
-                values.extend([no_resi, kode_cabang])
+    allowed_columns = {
+        "tanggal_masuk", "tanggal_keluar", "status_resi", "armada",
+        "pengirim", "kota_asal", "penerima", "kota_tujuan",
+        "nama_barang", "koli", "berat", "cbm", "total_ongkir",
+        "pembayaran", "ket_buku_gudang", "no_manifest", "ket_manifest",
+    }
 
-                query = f"UPDATE data_resi SET {', '.join(fields)} WHERE no_resi = ? AND kode_cabang = ?"
-                cursor.execute(query, values)
+    safe_updates = {
+        key: value
+        for key, value in (updates_dict or {}).items()
+        if key in allowed_columns
+    }
 
-            if barang_payload:
-                tabel_target = ["data_barang", "rincian_barang_resi", "data_barang_resi"]
-                for t_name in tabel_target:
-                    try:
-                        cursor.execute(f"SELECT 1 FROM {t_name} LIMIT 1")
-                        cursor.execute(f"""
-                            INSERT OR REPLACE INTO {t_name} (no_resi, nama_barang, koli, berat, cbm)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (no_resi, barang_payload['nama_barang'], barang_payload['koli'],
-                              barang_payload['berat'], barang_payload['cbm']))
-                        break
-                    except sqlite3.OperationalError:
-                        continue
+    if barang_payload:
+        for key in ("nama_barang", "koli", "berat", "cbm"):
+            if key in barang_payload:
+                safe_updates[key] = barang_payload[key]
 
-            conn.commit()
-            return True
-        except Exception as e:
-            if conn: conn.rollback()
-            print(f"[Update Buku Gudang] Error: {e}")
-            return False
-        finally:
-            if conn:
-                conn.close()
+    if not safe_updates:
+        return True
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        fields = [f"{column} = ?" for column in safe_updates]
+        values = list(safe_updates.values())
+        values.extend([no_resi, kode_cabang])
+
+        cursor = conn.execute(
+            f"""
+            UPDATE data_resi
+            SET {", ".join(fields)},
+                updated_at = CURRENT_TIMESTAMP
+            WHERE no_resi = ? AND kode_cabang = ?
+            """,
+            values,
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except sqlite3.Error as exc:
+        if conn:
+            conn.rollback()
+        logger.error("[Buku Gudang] Gagal memperbarui resi: %s", exc)
+        return False
+    finally:
+        if conn:
+            conn.close()
 
 
 def tandai_resi_selesai_massal(resi_terpilih, kode_cabang):
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            for no_resi in resi_terpilih:
-                cursor.execute(
-                    "UPDATE data_resi SET status_resi = 'SELESAI' WHERE no_resi = ? AND kode_cabang = ?",
-                    (no_resi, kode_cabang)
-                )
-            conn.commit()
-            return True
-        except Exception as e:
-            if conn: conn.rollback()
-            print(f"[Selesai Massal] Error: {e}")
-            return False
-        finally:
-            if conn:
-                conn.close()
+        return False
+
+    daftar_resi = [
+        str(no_resi).strip()
+        for no_resi in (resi_terpilih or [])
+        if str(no_resi).strip()
+    ]
+    if not daftar_resi:
+        return True
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.executemany(
+            """
+            UPDATE data_resi
+            SET status_resi = 'SELESAI',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE no_resi = ? AND kode_cabang = ?
+            """,
+            [(no_resi, kode_cabang) for no_resi in daftar_resi],
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error as exc:
+        if conn:
+            conn.rollback()
+        logger.error("[Buku Gudang] Gagal menyelesaikan resi massal: %s", exc)
+        return False
+    finally:
+        if conn:
+            conn.close()
 
 
 # ==============================================================================
@@ -986,118 +869,176 @@ def ambil_histori_manifest(kode_cabang, tahun_terpilih):
                 conn.close()
 
 
-def simpan_atau_update_manifest_data(manifest_id, kode_cabang, armada_payload, resi_list, is_edit_mode, tgl_k):
+def simpan_atau_update_manifest_data(
+    manifest_id,
+    kode_cabang,
+    armada_payload,
+    resi_list,
+    is_edit_mode,
+    tgl_k,
+):
 
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("BEGIN IMMEDIATE")
+        return False, "Penyimpanan cloud belum diaktifkan."
 
-            nopol = str(armada_payload.get('no_polisi', '') or '').strip().upper()
-            sopir = str(armada_payload.get('nama_sopir', '') or '').strip().upper()
-            jenis = str(armada_payload.get('jenis_truk', '') or '').strip()
-            ket_armada = str(armada_payload.get('ket_armada', '') or '').strip().upper()
+    manifest_id = str(manifest_id or "").strip().upper()
+    kode_cabang = str(kode_cabang or "").strip().upper()
+    if not manifest_id:
+        return False, "Nomor manifest tidak boleh kosong."
+    if not kode_cabang:
+        return False, "Kode cabang tidak boleh kosong."
+    if not resi_list:
+        return False, "Pilih minimal satu resi."
 
-            if nopol:
-                cursor.execute(
-                    "SELECT nama_sopir, jenis_truk, ket_armada FROM armada WHERE no_polisi = ?",
-                    (nopol,)
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+
+        nopol = str(armada_payload.get("no_polisi", "")).strip().upper()
+        sopir = str(armada_payload.get("nama_sopir", "")).strip().upper()
+        jenis = str(armada_payload.get("jenis_truk", "")).strip()
+        ket_armada = str(
+            armada_payload.get("ket_armada", "")
+        ).strip().upper()
+        nama_armada = str(
+            armada_payload.get("nama_armada", "")
+        ).strip()
+
+        if not nama_armada:
+            return False, "Detail armada/keterangan manifest tidak boleh kosong."
+
+        if nopol:
+            cursor.execute(
+                """
+                INSERT INTO armada (
+                    no_polisi, jenis_truk, nama_sopir,
+                    ket_armada, is_synced, updated_at
                 )
-                data_lama = cursor.fetchone()
+                VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+                ON CONFLICT(no_polisi) DO UPDATE SET
+                    jenis_truk = CASE
+                        WHEN TRIM(excluded.jenis_truk) <> ''
+                        THEN excluded.jenis_truk ELSE armada.jenis_truk
+                    END,
+                    nama_sopir = CASE
+                        WHEN TRIM(excluded.nama_sopir) <> ''
+                        THEN excluded.nama_sopir ELSE armada.nama_sopir
+                    END,
+                    ket_armada = CASE
+                        WHEN TRIM(excluded.ket_armada) <> ''
+                        THEN excluded.ket_armada ELSE armada.ket_armada
+                    END,
+                    is_synced = 0,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (nopol, jenis or "BELUM DIKETAHUI", sopir, ket_armada),
+            )
 
-                if data_lama:
-                    cursor.execute('''
-                        UPDATE armada
-                        SET nama_sopir = CASE
-                                WHEN TRIM(?) <> '' THEN ?
-                                ELSE nama_sopir
-                            END,
-                            jenis_truk = CASE
-                                WHEN TRIM(?) <> '' THEN ?
-                                ELSE jenis_truk
-                            END,
-                            ket_armada = CASE
-                                WHEN TRIM(?) <> '' THEN ?
-                                ELSE ket_armada
-                            END,
-                            is_synced = 0,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE no_polisi = ?
-                    ''', (
-                        sopir, sopir,
-                        jenis, jenis,
-                        ket_armada, ket_armada,
-                        nopol
-                    ))
-                else:
-                    jenis_db = jenis if jenis else "BELUM DIKETAHUI"
-                    cursor.execute('''
-                        INSERT INTO armada (
-                            no_polisi, nama_sopir, jenis_truk,
-                            hp_sopir, ket_armada, foto_armada,
-                            is_synced, updated_at
-                        )
-                        VALUES (?, ?, ?, '', ?, '', 0, CURRENT_TIMESTAMP)
-                    ''', (nopol, sopir, jenis_db, ket_armada))
+        if is_edit_mode:
+            cursor.execute(
+                """
+                UPDATE data_resi
+                SET armada = NULL,
+                    status_resi = 'DI GUDANG',
+                    tanggal_keluar = NULL,
+                    no_manifest = NULL,
+                    ket_manifest = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE no_manifest = ? AND kode_cabang = ?
+                """,
+                (manifest_id, kode_cabang),
+            )
 
-            if is_edit_mode:
-                cursor.execute(
-                    "UPDATE data_resi "
-                    "SET armada = NULL, status_resi = 'GUDANG', tanggal_keluar = NULL, "
-                    "no_manifest = NULL, ket_manifest = NULL "
-                    "WHERE no_manifest = ? AND kode_cabang = ?",
-                    (manifest_id, kode_cabang)
+        cursor.execute(
+            """
+            INSERT INTO manifest (
+                id_manifest, kode_cabang, tanggal,
+                no_polisi, nama_sopir, status_manifest,
+                is_synced, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'PERJALANAN', 0, CURRENT_TIMESTAMP)
+            ON CONFLICT(id_manifest) DO UPDATE SET
+                kode_cabang = excluded.kode_cabang,
+                tanggal = excluded.tanggal,
+                no_polisi = excluded.no_polisi,
+                nama_sopir = excluded.nama_sopir,
+                status_manifest = excluded.status_manifest,
+                is_synced = 0,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (manifest_id, kode_cabang, tgl_k, nopol or None, sopir),
+        )
+
+        for resi_data in resi_list:
+            no_resi = str(resi_data[0] if resi_data else "").strip()
+            ket_manifest = (
+                str(resi_data[1]).strip()
+                if len(resi_data) > 1 and resi_data[1] is not None
+                else ""
+            )
+            cursor.execute(
+                """
+                UPDATE data_resi
+                SET armada = ?,
+                    status_resi = 'PERJALANAN',
+                    tanggal_keluar = ?,
+                    no_manifest = ?,
+                    ket_manifest = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE no_resi = ? AND kode_cabang = ?
+                """,
+                (
+                    nama_armada, tgl_k, manifest_id,
+                    ket_manifest, no_resi, kode_cabang,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Resi {no_resi} tidak ditemukan pada cabang {kode_cabang}."
                 )
 
-            nama_armada = str(armada_payload.get('nama_armada', '') or '').strip()
-            if not nama_armada:
-                raise ValueError("Detail armada/keterangan Manifest tidak boleh kosong.")
-
-            for r_data in resi_list:
-                no_resi_item = r_data[0]
-                ket_manifest = r_data[1] if len(r_data) > 1 else ""
-                cursor.execute(
-                    "UPDATE data_resi "
-                    "SET armada = ?, status_resi = 'PERJALANAN', tanggal_keluar = ?, "
-                    "no_manifest = ?, ket_manifest = ?, updated_at = CURRENT_TIMESTAMP "
-                    "WHERE no_resi = ? AND kode_cabang = ?",
-                    (nama_armada, tgl_k, manifest_id, ket_manifest, no_resi_item, kode_cabang)
-                )
-
-                if cursor.rowcount == 0:
-                    raise ValueError(f"Resi {no_resi_item} tidak ditemukan pada cabang {kode_cabang}.")
-
-            conn.commit()
-            return True, ""
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            return False, str(e)
-        finally:
-            if conn:
-                conn.close()
+        conn.commit()
+        return True, ""
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        return False, str(exc)
+    finally:
+        if conn:
+            conn.close()
 
 def ambil_resi_detail_untuk_cetak(kode_cabang, resi_list):
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            placeholders = ','.join(['?'] * len(resi_list))
-            params = [kode_cabang] + resi_list
-            rows = cursor.execute(
-                f"SELECT no_resi, pengirim, penerima, kota_tujuan, nama_barang, koli, berat, cbm FROM data_resi WHERE kode_cabang = ? AND no_resi IN ({placeholders})",
-                params).fetchall()
-            return rows
-        finally:
-            if conn:
-                conn.close()
+        return []
+
+    daftar_resi = [
+        str(no_resi).strip()
+        for no_resi in (resi_list or [])
+        if str(no_resi).strip()
+    ]
+    if not daftar_resi:
+        return []
+
+    placeholders = ",".join("?" for _ in daftar_resi)
+    params = [kode_cabang] + daftar_resi
+
+    try:
+        with get_db_connection() as conn:
+            return conn.execute(
+                f"""
+                SELECT no_resi, pengirim, penerima, kota_tujuan,
+                       nama_barang, koli, berat, cbm
+                FROM data_resi
+                WHERE kode_cabang = ?
+                  AND no_resi IN ({placeholders})
+                """,
+                params,
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.error("[Manifest] Gagal mengambil detail cetak: %s", exc)
+        return []
 
 
 def ambil_resi_list_by_manifest(manifest_id, kode_cabang):
@@ -1121,89 +1062,142 @@ def ambil_resi_list_by_manifest(manifest_id, kode_cabang):
 # ==============================================================================
 
 def dapatkan_sequence_invoice_baru(prefix):
-    """Mendapatkan nomor urut invoice berikutnya berdasarkan prefix."""
+    """Menghasilkan sequence berikutnya dari angka terakhir nomor invoice."""
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            count = cursor.execute(
-                "SELECT COUNT(*) FROM invoice_header WHERE no_invoice LIKE ?",
-                (f"{prefix}%",)
-            ).fetchone()[0]
-            return int(count) + 1
-        except Exception as e:
-            logger.error(f"[Invoice] Gagal generate sequence: {e}")
-            return 1
-        finally:
-            if conn:
-                conn.close()
+        return 1
+
+    prefix = str(prefix or "").strip()
+    try:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT no_invoice
+                FROM invoice_header
+                WHERE no_invoice LIKE ?
+                """,
+                (f"{prefix}-%",),
+            ).fetchall()
+
+        max_sequence = 0
+        for row in rows:
+            nomor = str(row[0] or "")
+            match = re.search(r"-(\d+)$", nomor)
+            if match:
+                max_sequence = max(max_sequence, int(match.group(1)))
+
+        return max_sequence + 1
+    except (sqlite3.Error, ValueError) as exc:
+        logger.error("[Invoice] Gagal membuat sequence: %s", exc)
+        return 1
 
 
 def simpan_atau_update_invoice(header, items, is_update=False):
-    """Menyimpan invoice baru atau memperbarui invoice lama."""
+    """Menyimpan atau memperbarui invoice beserta detailnya secara atomic."""
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("BEGIN IMMEDIATE")
+        return False, "Penyimpanan cloud belum diaktifkan."
 
-            from datetime import datetime
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            no_invoice = header["no_invoice"]
+    no_invoice = str(header.get("no_invoice", "")).strip().upper()
+    if not no_invoice:
+        return False, "Nomor invoice tidak boleh kosong."
+    if not items:
+        return False, "Item invoice tidak boleh kosong."
 
-            if is_update:
-                cursor.execute("""
-                    UPDATE invoice_header
-                    SET tanggal = ?, client = ?, tipe_invoice = ?, jenis_pajak = ?, subtotal = ?, 
-                        total_akhir = ?, status = ?, metadata_json = ?, template_version = ?, updated_at = ?
-                    WHERE no_invoice = ?
-                """, (
-                    header["tanggal"], header["client"], header["tipe_invoice"], header["jenis_pajak"],
-                    header["subtotal"], header["total_akhir"], header["status"], header["metadata_json"],
-                    header["template_version"], now, no_invoice
-                ))
-                # Hapus detail lama untuk diganti yang baru
-                cursor.execute("DELETE FROM invoice_detail WHERE no_invoice = ?", (no_invoice,))
-            else:
-                # Cek duplikasi
-                existing = cursor.execute("SELECT 1 FROM invoice_header WHERE no_invoice = ?", (no_invoice,)).fetchone()
-                if existing:
-                    return False, "Nomor invoice sudah digunakan."
+    conn = None
+    try:
+        from datetime import datetime
 
-                cursor.execute("""
-                    INSERT INTO invoice_header
-                    (no_invoice, tanggal, client, tipe_invoice, jenis_pajak, subtotal, total_akhir, 
-                     status, created_at, metadata_json, template_version, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    no_invoice, header["tanggal"], header["client"], header["tipe_invoice"], header["jenis_pajak"],
-                    header["subtotal"], header["total_akhir"], header["status"], now, header["metadata_json"],
-                    header["template_version"], now
-                ))
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
 
-            # Insert detail item
-            for item in items:
-                cursor.execute("""
-                    INSERT INTO invoice_detail (no_invoice, nomor_urut, data_kolom, nominal_subtotal)
-                    VALUES (?, ?, ?, ?)
-                """, (no_invoice, item["nomor_urut"], item["data_kolom"], item["nominal"]))
+        if is_update:
+            cursor.execute(
+                """
+                UPDATE invoice_header
+                SET tanggal = ?, client = ?, tipe_invoice = ?,
+                    jenis_pajak = ?, subtotal = ?, total_akhir = ?,
+                    status = ?, metadata_json = ?,
+                    template_version = ?, updated_at = ?
+                WHERE no_invoice = ?
+                """,
+                (
+                    header["tanggal"], header["client"],
+                    header["tipe_invoice"], header["jenis_pajak"],
+                    header["subtotal"], header["total_akhir"],
+                    header["status"], header["metadata_json"],
+                    header["template_version"], now, no_invoice,
+                ),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return False, "Invoice yang akan diperbarui tidak ditemukan."
 
-            conn.commit()
-            return True, "Sukses"
+            cursor.execute(
+                "DELETE FROM invoice_detail WHERE no_invoice = ?",
+                (no_invoice,),
+            )
+        else:
+            if cursor.execute(
+                "SELECT 1 FROM invoice_header WHERE no_invoice = ?",
+                (no_invoice,),
+            ).fetchone():
+                conn.rollback()
+                return False, "Nomor invoice sudah digunakan."
 
-        except Exception as e:
-            if conn: conn.rollback()
-            logger.error(f"[Invoice] Gagal simpan/update: {e}")
-            return False, str(e)
-        finally:
-            if conn:
-                conn.close()
+            cursor.execute(
+                """
+                INSERT INTO invoice_header (
+                    no_invoice, tanggal, client, tipe_invoice,
+                    jenis_pajak, subtotal, total_akhir, status,
+                    created_at, metadata_json, template_version, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    no_invoice, header["tanggal"], header["client"],
+                    header["tipe_invoice"], header["jenis_pajak"],
+                    header["subtotal"], header["total_akhir"],
+                    header["status"], now, header["metadata_json"],
+                    header["template_version"], now,
+                ),
+            )
+
+        cursor.executemany(
+            """
+            INSERT INTO invoice_detail (
+                no_invoice, nomor_urut, data_kolom, nominal_subtotal
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (
+                    no_invoice,
+                    item["nomor_urut"],
+                    item["data_kolom"],
+                    item["nominal"],
+                )
+                for item in items
+            ],
+        )
+
+        conn.commit()
+        return True, "Sukses"
+    except sqlite3.IntegrityError as exc:
+        if conn:
+            conn.rollback()
+        if "invoice_header.no_invoice" in str(exc):
+            return False, "Nomor invoice sudah digunakan."
+        logger.exception("[Invoice] Integrity error")
+        return False, str(exc)
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        logger.exception("[Invoice] Gagal simpan/update")
+        return False, str(exc)
+    finally:
+        if conn:
+            conn.close()
 
 
 def ambil_histori_invoice(limit=300):
@@ -1297,10 +1291,7 @@ def ambil_semua_master_pengirim(kode_cabang):
 
 
 def ambil_histori_transaksi_by_pengirim(nama_pengirim, kode_cabang):
-    """Melacak histori resi berdasarkan nama pengirim.
-    Return dibuat 7 kolom agar sesuai dengan tabel histori SubTabPengirim:
-    tanggal_masuk, no_resi, penerima, koli, berat, cbm, total_ongkir.
-    """
+    """Melacak histori resi berdasarkan nama pengirim."""
     conn = None
     try:
         nama_pengirim = str(nama_pengirim or "").strip()
@@ -1416,59 +1407,64 @@ def ambil_histori_transaksi_by_penerima(nama_penerima, kode_cabang):
 
 
 def ambil_semua_master_penerima_full(kode_cabang):
-    """Menarik data lengkap penerima untuk keperluan render tabel UI"""
-    conn = None
+    """Mengambil data lengkap master penerima untuk tabel UI."""
+    kode_cabang = str(
+        kode_cabang or CURRENT_SESSION.get("kode_cabang", "PUSAT")
+    ).strip().upper()
+
     try:
-        kode_cabang = str(kode_cabang or CURRENT_SESSION.get('kode_cabang', 'PUSAT')).strip()
-
-        pastikan_kolom_provinsi_master_penerima()
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT
-                id_penerima,
-                COALESCE(nama, '') AS nama,
-                COALESCE(no_hp, '') AS no_hp,
-                COALESCE(alamat, '') AS alamat,
-                COALESCE(kota, '') AS kota,                
-                COALESCE(provinsi, '') AS provinsi,                
-                (SELECT COUNT(*) FROM data_resi WHERE TRIM(UPPER(penerima)) = TRIM(UPPER(master_penerima.nama)) AND kode_cabang = master_penerima.kode_cabang) AS total_transaksi,
-                COALESCE(pembayaran, 'TF / INVOICE') AS pembayaran,
-                COALESCE(status_tagihan, 'NORMAL') AS status_tagihan
-            FROM master_penerima
-            WHERE kode_cabang = ?
-            ORDER BY TRIM(COALESCE(nama, '')) COLLATE NOCASE ASC
-        """, (kode_cabang,))
-
-        rows = cursor.fetchall()
-        return rows
-
-    except Exception as e:
-        print(f"[Master Penerima] Gagal mengambil data: {e}")
+        with get_db_connection() as conn:
+            return conn.execute(
+                """
+                SELECT
+                    id_penerima,
+                    COALESCE(nama, ''),
+                    COALESCE(no_hp, ''),
+                    COALESCE(alamat, ''),
+                    COALESCE(kota, ''),
+                    COALESCE(provinsi, ''),
+                    (
+                        SELECT COUNT(*)
+                        FROM data_resi
+                        WHERE kode_cabang = master_penerima.kode_cabang
+                          AND TRIM(UPPER(penerima))
+                              = TRIM(UPPER(master_penerima.nama))
+                    ) AS total_transaksi,
+                    COALESCE(pembayaran, 'TF / INVOICE'),
+                    COALESCE(status_tagihan, 'NORMAL')
+                FROM master_penerima
+                WHERE kode_cabang = ?
+                ORDER BY TRIM(COALESCE(nama, '')) COLLATE NOCASE ASC
+                """,
+                (kode_cabang,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.error("[Master Penerima] Gagal mengambil data: %s", exc)
         return []
-
-    finally:
-        if conn:
-            conn.close()
 
 
 def ubah_status_tagihan_penerima(id_penerima, status_baru, kode_cabang):
-    """Mengubah status blacklist/normal penerima langsung dari data master"""
+    """Mengubah status tagihan penerima."""
     conn = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE master_penerima 
-            SET status_tagihan = ?, updated_at = CURRENT_TIMESTAMP 
+        cursor = conn.execute(
+            """
+            UPDATE master_penerima
+            SET status_tagihan = ?,
+                is_synced = 0,
+                updated_at = CURRENT_TIMESTAMP
             WHERE id_penerima = ? AND kode_cabang = ?
-        """, (status_baru, id_penerima, kode_cabang))
+            """,
+            (status_baru, id_penerima, kode_cabang),
+        )
         conn.commit()
-    except Exception as e:
-        if conn: conn.rollback()
-        print(f"[Ubah Status Pembayaran] Error: {e}")
+        return cursor.rowcount > 0
+    except sqlite3.Error as exc:
+        if conn:
+            conn.rollback()
+        logger.error("[Master Penerima] Gagal mengubah status: %s", exc)
+        return False
     finally:
         if conn:
             conn.close()
@@ -1527,49 +1523,24 @@ def update_master_penerima_dari_tabel(id_penerima, kode_cabang, nama, no_hp, ala
             conn.close()
 
 
-def pastikan_kolom_provinsi_master_penerima():
-    """
-    Menambahkan kolom provinsi pada master_penerima jika belum ada.
-    Kolom ini dipakai untuk autofill propinsi di Tab Resi.
-    """
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute("SELECT provinsi FROM master_penerima LIMIT 1")
-        except sqlite3.OperationalError:
-            cursor.execute("ALTER TABLE master_penerima ADD COLUMN provinsi TEXT;")
-            conn.commit()
-            print("[Init DB] Kolom provinsi berhasil ditambahkan ke master_penerima.")
-
-        return True
-
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"[Init DB] Gagal cek/tambah kolom provinsi master_penerima: {e}")
-        return False
-
-    finally:
-        if conn:
-            conn.close()
-
-
 # --- 📁 SUB-TAB: DATA ARMADA TRUK & SOPIR ---
 
-def simpan_atau_update_armada(db_name, no_polisi, nama_sopir, jenis_truk, hp_sopir, ket_armada, foto_armada=""):
-    '''Menambah atau memperbarui Armada berdasarkan nomor polisi tanpa menimpa data lama dengan nilai kosong.'''
-    if not db_name:
-        db_name = CURRENT_SESSION.get('db_name', 'database_cargo.db')
-
-    nopol = str(no_polisi or '').strip().upper()
-    sopir = str(nama_sopir or '').strip().upper()
-    jenis = str(jenis_truk or '').strip()
-    hp = str(hp_sopir or '').strip()
-    ket = str(ket_armada or '').strip().upper()
-    foto = str(foto_armada or '').strip()
+def simpan_atau_update_armada(
+    db_name,
+    no_polisi,
+    nama_sopir,
+    jenis_truk,
+    hp_sopir,
+    ket_armada,
+    foto_armada="",
+):
+    """Menambah atau memperbarui armada berdasarkan nomor polisi."""
+    nopol = str(no_polisi or "").strip().upper()
+    sopir = str(nama_sopir or "").strip().upper()
+    jenis = str(jenis_truk or "").strip()
+    hp = str(hp_sopir or "").strip()
+    ket = str(ket_armada or "").strip().upper()
+    foto = str(foto_armada or "").strip()
 
     if not nopol:
         return False, "No. Polisi wajib diisi."
@@ -1578,104 +1549,67 @@ def simpan_atau_update_armada(db_name, no_polisi, nama_sopir, jenis_truk, hp_sop
 
     conn = None
     try:
-        conn = sqlite3.connect(db_name, timeout=20.0)
-        cursor = conn.cursor()
-        cursor.execute("BEGIN IMMEDIATE")
-        cursor.execute("SELECT 1 FROM armada WHERE no_polisi = ?", (nopol,))
-        ada = cursor.fetchone()
-
-        if ada:
-            cursor.execute('''
-                UPDATE armada
-                SET nama_sopir = CASE WHEN TRIM(?) <> '' THEN ? ELSE nama_sopir END,
-                    jenis_truk = CASE WHEN TRIM(?) <> '' THEN ? ELSE jenis_truk END,
-                    hp_sopir = CASE WHEN TRIM(?) <> '' THEN ? ELSE hp_sopir END,
-                    ket_armada = CASE WHEN TRIM(?) <> '' THEN ? ELSE ket_armada END,
-                    foto_armada = CASE WHEN TRIM(?) <> '' THEN ? ELSE foto_armada END,
-                    is_synced = 0,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE no_polisi = ?
-            ''', (sopir, sopir, jenis, jenis, hp, hp, ket, ket, foto, foto, nopol))
-        else:
-            cursor.execute('''
-                INSERT INTO armada (
-                    no_polisi, nama_sopir, jenis_truk, hp_sopir,
-                    ket_armada, foto_armada, is_synced, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
-            ''', (nopol, sopir, jenis, hp, ket, foto))
-
+        conn = get_db_connection(db_name)
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            INSERT INTO armada (
+                no_polisi, jenis_truk, nama_sopir, hp_sopir,
+                ket_armada, foto_armada, is_synced, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+            ON CONFLICT(no_polisi) DO UPDATE SET
+                jenis_truk = CASE
+                    WHEN TRIM(excluded.jenis_truk) <> ''
+                    THEN excluded.jenis_truk ELSE armada.jenis_truk
+                END,
+                nama_sopir = CASE
+                    WHEN TRIM(excluded.nama_sopir) <> ''
+                    THEN excluded.nama_sopir ELSE armada.nama_sopir
+                END,
+                hp_sopir = CASE
+                    WHEN TRIM(excluded.hp_sopir) <> ''
+                    THEN excluded.hp_sopir ELSE armada.hp_sopir
+                END,
+                ket_armada = CASE
+                    WHEN TRIM(excluded.ket_armada) <> ''
+                    THEN excluded.ket_armada ELSE armada.ket_armada
+                END,
+                foto_armada = CASE
+                    WHEN TRIM(excluded.foto_armada) <> ''
+                    THEN excluded.foto_armada ELSE armada.foto_armada
+                END,
+                is_synced = 0,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (nopol, jenis, sopir, hp, ket, foto),
+        )
         conn.commit()
         return True, ""
-    except Exception as e:
+    except sqlite3.Error as exc:
         if conn:
             conn.rollback()
-        return False, str(e)
+        return False, str(exc)
     finally:
         if conn:
             conn.close()
 
 def ambil_semua_armada(db_name=None):
-    """Menampilkan list semua unit truk terdaftar di menu manajemen armada"""
-    if not db_name:
-        db_name = CURRENT_SESSION.get('db_name', 'database_cargo.db')
-
-    conn = None
+    """Menampilkan daftar armada terdaftar."""
     try:
-        conn = sqlite3.connect(db_name, timeout=20.0)
-        cursor = conn.cursor()
+        with get_db_connection(db_name) as conn:
+            return conn.execute(
+                """
+                SELECT no_polisi, nama_sopir, jenis_truk,
+                       hp_sopir, ket_armada
+                FROM armada
+                ORDER BY no_polisi ASC
+                """
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.error("[Armada] Gagal mengambil data: %s", exc)
+        return []
 
-        cursor.execute(
-            "SELECT no_polisi, nama_sopir, jenis_truk, hp_sopir, ket_armada FROM armada ORDER BY no_polisi ASC")
-        data = cursor.fetchall()
-        return data
-    finally:
-        if conn:
-            conn.close()
-
-
-def migrasi_cek_kolom_armada():
-    '''
-    Memastikan kolom pendukung Master Armada tersedia.
-
-    Database masih tahap trial, sehingga perubahan NOT NULL nama_sopir diterapkan melalui
-    database_manager.py saat database dibuat ulang. Fungsi ini tetap menjaga kompatibilitas
-    bila file database uji lama masih sempat dibuka.
-    '''
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA table_info(armada)")
-        info_kolom = cursor.fetchall()
-        columns = [info[1] for info in info_kolom]
-
-        if not columns:
-            return False
-
-        if 'ket_armada' not in columns:
-            cursor.execute("ALTER TABLE armada ADD COLUMN ket_armada TEXT")
-            if 'keterangan' in columns:
-                cursor.execute('''
-                    UPDATE armada
-                    SET ket_armada = keterangan
-                    WHERE TRIM(COALESCE(ket_armada, '')) = ''
-                      AND TRIM(COALESCE(keterangan, '')) <> ''
-                ''')
-
-        if 'foto_armada' not in columns:
-            cursor.execute("ALTER TABLE armada ADD COLUMN foto_armada TEXT")
-
-        conn.commit()
-        return True
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"[Migration Fallback] Info armada: {e}")
-        return False
-    finally:
-        if conn:
-            conn.close()
 
 def ambil_semua_armada_full():
     """Menarik semua kolom data armada kargo terdaftar untuk di-render ke UI"""
@@ -1696,12 +1630,6 @@ def ambil_semua_armada_full():
 
 
 def simpan_atau_update_armada_full(nopol, jenis, sopir, hp, ket, foto, mode="TAMBAH"):
-    '''
-    Menyimpan Master Armada dari tab Armada.
-
-    - TAMBAH: menolak nomor polisi yang sudah ada agar tidak overwrite diam-diam.
-    - EDIT: memperbarui baris terpilih; nama sopir boleh kosong.
-    '''
     nopol = str(nopol or '').strip().upper()
     jenis = str(jenis or '').strip()
     sopir = str(sopir or '').strip().upper()
@@ -1774,58 +1702,112 @@ def simpan_atau_update_armada_full(nopol, jenis, sopir, hp, ket, foto, mode="TAM
 def ambil_semua_data_cabang(limit=10):
     """Mengambil daftar kantor cabang dari database."""
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT kode_cabang, nama_cabang, resi_prefix, start_seq_json, aturan_prefix FROM data_cabang LIMIT ?",
-                (limit,)
-            )
-            return cursor.fetchall()
-        except Exception as e:
-            logger.error(f"[Setting] Gagal ambil data cabang: {e}")
-            return []
-        finally:
-            if conn:
-                conn.close()
+        return []
+
+    try:
+        limit = max(1, int(limit))
+    except (TypeError, ValueError):
+        limit = 10
+
+    try:
+        with get_db_connection() as conn:
+            return conn.execute(
+                """
+                SELECT kode_cabang, nama_cabang, resi_prefix,
+                       start_seq_json, aturan_prefix
+                FROM data_cabang
+                ORDER BY kode_cabang ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.error("[Setting] Gagal mengambil cabang: %s", exc)
+        return []
 
 
-def simpan_semua_pengaturan_dan_cabang(settings_to_save, branches_to_save):
-    """Menyimpan seluruh konfigurasi sistem dan data cabang secara atomic."""
+def simpan_semua_pengaturan_dan_cabang(
+    settings_to_save,
+    branches_to_save,
+):
+    """Menyimpan pengaturan dan cabang secara atomic tanpa REPLACE parent row."""
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("BEGIN IMMEDIATE")
+        return False, "Penyimpanan cloud belum diaktifkan."
 
-            # 1. Simpan Pengaturan Sistem
-            for kunci, nilai in settings_to_save:
-                cursor.execute(
-                    "INSERT OR REPLACE INTO pengaturan_sistem (kunci, nilai) VALUES (?, ?)",
-                    (kunci, nilai)
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+
+        for kunci, nilai in settings_to_save:
+            cursor.execute(
+                """
+                INSERT INTO pengaturan_sistem (kunci, nilai)
+                VALUES (?, ?)
+                ON CONFLICT(kunci) DO UPDATE SET
+                    nilai = excluded.nilai
+                """,
+                (str(kunci), str(nilai)),
+            )
+
+        seen_codes = set()
+        for branch in branches_to_save:
+            kode = str(branch.get("kode_cabang", "")).strip().upper()
+            nama = str(branch.get("nama_cabang", "")).strip().upper()
+            prefix = str(branch.get("resi_prefix", "")).strip().upper()
+            start_seq = str(
+                branch.get("start_seq_json", '{"DEFAULT": 0}')
+            ).strip()
+            aturan = str(
+                branch.get("aturan_prefix", '{"DEFAULT": "INV"}')
+            ).strip()
+
+            if not kode or not nama or not prefix:
+                raise ValueError(
+                    "Kode, nama, dan prefix cabang wajib diisi."
+                )
+            if kode in seen_codes:
+                raise ValueError(f"Kode cabang {kode} digunakan lebih dari sekali.")
+
+            json.loads(start_seq)
+            json.loads(aturan)
+            seen_codes.add(kode)
+
+            cursor.execute(
+                """
+                INSERT INTO data_cabang (
+                    kode_cabang, nama_cabang, resi_prefix,
+                    start_seq_json, aturan_prefix
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(kode_cabang) DO UPDATE SET
+                    nama_cabang = excluded.nama_cabang,
+                    resi_prefix = excluded.resi_prefix,
+                    start_seq_json = excluded.start_seq_json,
+                    aturan_prefix = excluded.aturan_prefix
+                """,
+                (kode, nama, prefix, start_seq, aturan),
+            )
+
+            if kode == str(
+                CURRENT_SESSION.get("kode_cabang", "")
+            ).strip().upper():
+                CURRENT_SESSION.update(
+                    {
+                        "nama_cabang": nama,
+                        "resi_prefix": prefix,
+                        "aturan_prefix": json.loads(aturan),
+                    }
                 )
 
-            # 2. Simpan Data Cabang
-            for b in branches_to_save:
-                cursor.execute("""
-                    INSERT OR REPLACE INTO data_cabang 
-                    (kode_cabang, nama_cabang, resi_prefix, start_seq_json, aturan_prefix)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (b['kode_cabang'], b['nama_cabang'], b['resi_prefix'], b['start_seq_json'], b['aturan_prefix']))
-
-            conn.commit()
-            return True, "Sukses"
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            logger.error(f"[Setting] Gagal simpan pengaturan: {e}")
-            return False, str(e)
-        finally:
-            if conn:
-                conn.close()
+        conn.commit()
+        return True, "Sukses"
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        logger.exception("[Setting] Gagal menyimpan pengaturan/cabang")
+        return False, str(exc)
+    finally:
+        if conn:
+            conn.close()

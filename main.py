@@ -4,16 +4,16 @@ import os
 import ctypes
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QTabWidget, QTabBar,
-                             QStylePainter, QStyleOptionTab, QStyle, QDialog, QMessageBox,
+                             QStylePainter, QStyleOptionTab, QStyle, QDialog,
                              QLineEdit, QTextEdit)
-from PyQt5.QtCore import Qt, QSettings, QObject, QEvent, QTimer
+from PyQt5.QtCore import Qt, QSettings, QObject, QEvent, QTimer, QLocale
 from PyQt5.QtGui import QColor, QFontDatabase, QFont
 
 from utils.typography import get_master_font
 from utils.placeholder_helper import setup_placeholder_dinamis
 from utils.cursor_helper import terapkan_kursor_global
 
-from config import DATA_CLIENT, CURRENT_SESSION
+from config import DATA_CLIENT, CURRENT_SESSION, muat_pengaturan_sistem
 
 from themes.base import BASE_STYLE
 from themes.shell import get_main_shell_styles
@@ -23,23 +23,15 @@ from themes.scrollbar import GlobalScrollbarManager
 
 from login import LoginWindow
 from database_manager import init_db
-import services.database_service as db_service
 
 from tabs.tab_resi import TabResi
 from tabs.tab_buku_gudang import TabBukuGudang
 from tabs.tab_manifest import TabManifest
 from tabs.tab_invoice import TabInvoice
 from tabs.tab_kontak_armada import TabKontakArmada
-from tab_setting import TabSettingSistem
+from tabs.tab_setting import TabSettingSistem
 
 class GlobalPlaceholderManager(QObject):
-    """
-    Memasang pengelola placeholder satu kali ketika widget dipoles Qt.
-
-    Seluruh logika signal dan dynamic property dipusatkan di
-    utils.placeholder_helpers agar tidak ada koneksi ganda.
-    """
-
     def eventFilter(self, obj, event):
         if (
             event.type() == QEvent.Polish
@@ -92,15 +84,11 @@ class MainWindow(QMainWindow):
             "light",
         )
 
-        # Mencegah klik tema berulang ketika proses sebelumnya
-        # belum selesai dan menyimpan tema lokal per tab.
         self._sedang_ganti_tema = False
         self._cache_tema_tab = {}
 
         app = QApplication.instance()
         if app is not None:
-            # Stylesheet global dipasang hanya sekali. Pergantian tema
-            # berikutnya cukup mengganti QPalette yang jauh lebih ringan.
             if not bool(app.property("_base_style_terpasang")):
                 app.setStyleSheet(BASE_STYLE)
                 app.setProperty("_base_style_terpasang", True)
@@ -226,12 +214,7 @@ class MainWindow(QMainWindow):
         tab_widget,
         force=False,
     ):
-        """
-        Menerapkan tema lokal hanya pada tab yang dibutuhkan.
 
-        Tab tersembunyi tidak diproses saat tombol tema ditekan.
-        Tema tab tersebut diterapkan ketika pengguna membukanya.
-        """
         if tab_widget is None:
             return
 
@@ -272,23 +255,32 @@ class MainWindow(QMainWindow):
             tab_widget.setUpdatesEnabled(True)
             tab_widget.update()
 
-
     def refresh_tab_utama_diklik(self, index):
         tab_aktif = self.tabs.widget(index)
 
-        # Tema lokal diterapkan secara lazy hanya saat tab dibuka.
-        self._terapkan_tema_lokal(
-            tab_aktif
-        )
+        self._terapkan_tema_lokal(tab_aktif)
 
         nama_tab = self.tabs.tabText(index)
 
         if "Data Resi" in nama_tab:
-            if hasattr(
+            fungsi_refresh = getattr(
                 self.tab_resi_widget,
                 "auto_refresh_histori",
-            ):
-                self.tab_resi_widget.auto_refresh_histori()
+                None,
+            )
+
+            if callable(fungsi_refresh):
+                fungsi_refresh()
+
+        elif "Manifest" in nama_tab:
+            fungsi_refresh_armada = getattr(
+                self.tab_manifest,
+                "setup_autocomplete_armada",
+                None,
+            )
+
+            if callable(fungsi_refresh_armada):
+                fungsi_refresh_armada()
 
     def update_session_ui(self):
         nama_perusahaan = DATA_CLIENT.get('nama_perusahaan', 'PT EKSPEDISI KARGO')
@@ -330,9 +322,6 @@ class MainWindow(QMainWindow):
 
         app = QApplication.instance()
 
-        # QPalette jauh lebih ringan daripada mengganti QSS QApplication.
-        # QApplication.setStyleSheet() memaksa Qt memoles ulang seluruh
-        # widget, termasuk semua tab yang sedang tersembunyi.
         self.setUpdatesEnabled(False)
 
         try:
@@ -379,8 +368,6 @@ class MainWindow(QMainWindow):
             ):
                 button.setStyleSheet(style_btn)
 
-            # Hanya scrollbar yang diperbarui. Tidak ada
-            # QApplication.setStyleSheet() ulang.
             self.scrollbar_manager.refresh_semua(
                 force=force,
             )
@@ -389,8 +376,6 @@ class MainWindow(QMainWindow):
             self.setUpdatesEnabled(True)
             self.update()
 
-        # Tema lokal tab aktif dijalankan pada putaran event berikutnya.
-        # Shell aplikasi berubah lebih dahulu sehingga klik terasa instan.
         tab_aktif = self.tabs.currentWidget()
 
         if tab_aktif is not None:
@@ -485,12 +470,6 @@ class MainWindow(QMainWindow):
         else:
             super().wheelEvent(event)
 
-    def penangkap_error_gaib(type, value, traceback_obj):
-        import traceback
-        traceback.print_exception(type, value, traceback_obj)
-
-    sys.excepthook = penangkap_error_gaib
-
 def load_fonts():
     font_folder = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
@@ -533,141 +512,119 @@ def load_fonts():
         )
 
 
-if __name__ == "__main__":
-    # 1. BUAT DAN SIAPKAN DATABASE LEBIH DULU
-    nama_db = CURRENT_SESSION.get('db_name', 'database_cargo.db')
-    init_db(nama_db)
-    db_service.inisialisasi_database()
+def penangkap_error_gaib(error_type, value, traceback_obj):
+    import traceback
 
-    # 2. SINKRONISASI DATA PENGATURAN SECARA AMAN
-    from config import muat_pengaturan_sistem, DATA_CLIENT
-
-    # Update memori global dengan data asli dari tabel pengaturan_sistem
-    DATA_CLIENT.update(muat_pengaturan_sistem())
-
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except:
-        pass
-
-    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-
-    from PyQt5.QtCore import QLocale
-
-    QLocale.setDefault(QLocale(QLocale.Indonesian, QLocale.Indonesia))
-
-    app = QApplication(sys.argv)
-
-    app.setStyle('Fusion')
-
-    placeholder_manager = GlobalPlaceholderManager()
-    app.installEventFilter(placeholder_manager)
-
-    terapkan_kursor_global(app)
-
-    # 1. Daftarkan seluruh file font ke Qt.
-    load_fonts()
-
-    # 2. Baca pilihan font terakhir dari QSettings.
-    font_aktif = get_master_font()
-
-    # 3. Periksa apakah font tersedia.
-    font_tersedia = set(
-        QFontDatabase().families()
+    traceback.print_exception(
+        error_type,
+        value,
+        traceback_obj,
     )
 
+
+sys.excepthook = penangkap_error_gaib
+
+
+def konfigurasi_font_aplikasi(app):
+    load_fonts()
+
+    font_aktif = get_master_font()
+    font_tersedia = set(QFontDatabase().families())
+
     if font_aktif not in font_tersedia:
-        print(
-            f"⚠️ Font '{font_aktif}' tidak tersedia."
-        )
+        print(f"⚠️ Font '{font_aktif}' tidak tersedia.")
 
         if "Inter" in font_tersedia:
             font_aktif = "Inter"
         else:
             font_aktif = app.font().family()
 
-    # 4. Terapkan font sebelum MainWindow dibuat.
     font_aplikasi = QFont(font_aktif)
     font_aplikasi.setPointSize(10)
     font_aplikasi.setWeight(QFont.Normal)
-    font_aplikasi.setStyleStrategy(
-        QFont.PreferAntialias
-    )
-
+    font_aplikasi.setStyleStrategy(QFont.PreferAntialias)
     app.setFont(font_aplikasi)
 
     print("====================================")
-    print("Font tersimpan :", get_master_font())
     print("Font diterapkan:", app.font().family())
     print("====================================")
 
-    # MainWindow dibuat setelah font diterapkan.
-    main_window = MainWindow()
 
-    from PyQt5.QtGui import QFontInfo
-    from PyQt5.QtWidgets import QWidget
+def jalankan_aplikasi():
+    """Menyiapkan database, login, dan dashboard aplikasi."""
+    nama_db = CURRENT_SESSION.get(
+        "db_name",
+        "database_cargo.db",
+    )
 
-    print("\n========== PEMERIKSAAN FONT ==========")
+    db_path = init_db(nama_db)
+    CURRENT_SESSION["db_name"] = db_path
 
-    widget_tes = {
-        "Judul utama": main_window.tab_resi_widget.lbl_main_title,
-        "Label tanggal": main_window.tab_resi_widget.lbl_tgl_tag,
-        "Nomor resi": main_window.tab_resi_widget.txt_resi_display,
-        "Input pengirim": main_window.tab_resi_widget.txt_pengirim,
-        "Combo provinsi": main_window.tab_resi_widget.cb_provinsi,
-        "Header tabel": main_window.tab_resi_widget.table_items.horizontalHeader(),
-        "Isi tabel": main_window.tab_resi_widget.table_items,
-        "Tombol tambah": main_window.tab_resi_widget.btn_tambah_baris,
-        "Tombol simpan": main_window.tab_resi_widget.btn_generate_simpan,
-        "Histori": main_window.tab_resi_widget.list_histori,
+    DATA_CLIENT.update(muat_pengaturan_sistem())
+
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        pass
+
+    QApplication.setAttribute(
+        Qt.AA_EnableHighDpiScaling,
+        True,
+    )
+    QApplication.setAttribute(
+        Qt.AA_UseHighDpiPixmaps,
+        True,
+    )
+
+    QLocale.setDefault(
+        QLocale(
+            QLocale.Indonesian,
+            QLocale.Indonesia,
+        )
+    )
+
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+
+    placeholder_manager = GlobalPlaceholderManager()
+    app.installEventFilter(placeholder_manager)
+
+    terapkan_kursor_global(app)
+    konfigurasi_font_aplikasi(app)
+
+    window_holder = {
+        "main": None,
     }
 
-    print("\n===== WIDGET YANG BUKAN INTER =====")
-
-    jumlah_non_inter = 0
-
-    for widget in main_window.findChildren(QWidget):
-        font_aktual = QFontInfo(widget.font()).family()
-
-        if font_aktual.casefold() != "inter":
-            jumlah_non_inter += 1
-
-            print(
-                widget.metaObject().className(),
-                "| objectName:",
-                widget.objectName() or "-",
-                "| font:",
-                font_aktual,
-            )
-
-    print("Jumlah widget non-Inter:", jumlah_non_inter)
-    print("===================================\n")
-
-
-    for nama, widget in widget_tes.items():
-        requested_font = widget.font().family()
-        actual_font = QFontInfo(widget.font()).family()
-
-        print(
-            f"{nama:18} | "
-            f"diminta: {requested_font:20} | "
-            f"aktual: {actual_font}"
-        )
-
-    print("======================================\n")
-
-
     def buka_dashboard_kargo():
+        CURRENT_SESSION["db_name"] = db_path
+
+        main_window = window_holder["main"]
+
+        if main_window is None:
+            main_window = MainWindow()
+            window_holder["main"] = main_window
+
         main_window.update_session_ui()
         main_window.showMaximized()
+        main_window.raise_()
+        main_window.activateWindow()
 
-        for w in main_window.findChildren((QLineEdit, QTextEdit)):
-            if w.isVisible():
-                w.style().unpolish(w)
-                w.style().polish(w)
-                w.update()
+        for widget in main_window.findChildren(
+            (QLineEdit, QTextEdit)
+        ):
+            if widget.isVisible():
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+                widget.update()
 
-    login_window = LoginWindow(buka_dashboard_kargo)
+    login_window = LoginWindow(
+        buka_dashboard_kargo
+    )
     login_window.show()
-    sys.exit(app.exec_())
+
+    return app.exec_()
+
+
+if __name__ == "__main__":
+    sys.exit(jalankan_aplikasi())

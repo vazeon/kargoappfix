@@ -1,8 +1,9 @@
 # tabs/tab_resi.py
 import json
 import logging
+from decimal import Decimal, ROUND_HALF_UP
 
-from PyQt5.QtCore import QDate, QEasingCurve, QPropertyAnimation, QSettings, Qt, QTimer
+from PyQt5.QtCore import QDate, QEasingCurve, QEvent, QPropertyAnimation, QSettings, Qt, QTimer
 from PyQt5.QtWidgets import (QComboBox, QCompleter, QDateEdit, QGraphicsOpacityEffect,
                              QGridLayout, QGroupBox, QHeaderView, QHBoxLayout, QLabel, QLineEdit,
                              QListWidget, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
@@ -115,6 +116,13 @@ class TabResi(ZoomTableMixin, QWidget):
         self.settings = QSettings("AplikasiEkspedisi", "PengaturanUI")
         self.current_theme = self.settings.value("theme", "light")
         self.current_resi_data = None
+
+        # Menyimpan subtotal sebelum PPN agar pergantian PAJAK/NONPAJAK
+        # tidak menyebabkan pajak dihitung berulang kali.
+        self._mode_total_ongkir = None
+        self._subtotal_manual_ongkir = 0
+        self._sedang_set_total_ongkir = False
+
         self.init_ui()
 
     def init_ui(self):
@@ -346,16 +354,31 @@ class TabResi(ZoomTableMixin, QWidget):
 
         self.txt_ongkir_kg = QLineEdit()
         self.txt_ongkir_kg.setPlaceholderText("Ongkir /kg")
+        # Shift+Tab dari Detail Ongkir kembali ke sel terakhir Detail Barang.
+        self.txt_ongkir_kg.installEventFilter(self)
 
         self.txt_ongkir_m3 = QLineEdit()
         self.txt_ongkir_m3.setPlaceholderText("Ongkir /m3")
 
         self.txt_total_ongkir = QLineEdit()
         self.txt_total_ongkir.setPlaceholderText("Input Bisa Otomatis dan Manual")
+        self.txt_total_ongkir.setToolTip(
+            "Untuk transaksi PAJAK, angka manual dianggap subtotal sebelum PPN 1,1%."
+        )
+        self.txt_total_ongkir.textEdited.connect(self._catat_subtotal_ongkir_manual)
+        self.txt_total_ongkir.editingFinished.connect(
+            self._terapkan_ppn_ke_total_manual
+        )
 
         self.cb_pajak = QComboBox()
-        self.cb_pajak.addItems(["NONPAJAK", "PAJAK"])
+        self.cb_pajak.addItems(["NONPAJAK", "PAJAK (PPN 1,1%)"])
+        self.cb_pajak.setToolTip(
+            "PAJAK menambahkan PPN 1,1% ke subtotal ongkir."
+        )
         self.cb_pajak.currentTextChanged.connect(self.otomatisasi_nomor_resi)
+        self.cb_pajak.currentTextChanged.connect(
+            self._perbarui_total_saat_jenis_transaksi_berubah
+        )
         self.cb_payment = QComboBox()
         self.cb_payment.addItems(["TF / INVOICE", "CASH"])
 
@@ -450,8 +473,16 @@ class TabResi(ZoomTableMixin, QWidget):
         )
 
         self.btn_generate_simpan = QPushButton("⚡ SIMPAN DAN CETAK")
+        self.btn_generate_simpan.setFocusPolicy(Qt.StrongFocus)
         self.btn_generate_simpan.setStyleSheet(BTN_SIMPAN_CETAK_STYLE)
+        self._terapkan_gaya_fokus_tombol_utama()
         self.btn_generate_simpan.clicked.connect(self.simpan_ke_database)
+
+        # Navigasi akhir form:
+        # Metode Payment -> Simpan dan Cetak -> Reset Form.
+        # Shift+Tab bergerak kembali dengan urutan sebaliknya.
+        self.cb_payment.installEventFilter(self)
+        self.btn_generate_simpan.installEventFilter(self)
 
         self.widget_action_kanan = QWidget()
         self.widget_action_kanan.setSizePolicy(
@@ -463,22 +494,30 @@ class TabResi(ZoomTableMixin, QWidget):
         layout_action_kanan.setSpacing(0)
 
         self.lbl_reset_form = QPushButton("Reset Form")
-        self.lbl_reset_form.setFocusPolicy(Qt.NoFocus)
+        self.lbl_reset_form.setFocusPolicy(Qt.StrongFocus)
 
         self.lbl_reset_form.setStyleSheet("""
                     QPushButton {
                         color: #ef4444;
                         background-color: transparent;
-                        border: none;
+                        border: 2px solid transparent;
+                        border-radius: 6px;
+                        padding: 5px 9px;
                         font-weight: 600;
                         text-align: left;
                     }
                     QPushButton:hover {
                         color: #b91c1c; /* Warna berubah jadi merah yang lebih gelap */
                     }
+                    QPushButton:focus {
+                        /* Tetap mempertahankan tampilan normal tombol.
+                           Hanya outline fokus biru yang dibuat lebih tebal. */
+                        border: 3px solid #3b82f6;
+                    }
                 """)
 
         self.lbl_reset_form.clicked.connect(self.reset_form_input_manual)
+        self.lbl_reset_form.installEventFilter(self)
 
         layout_action_kanan.addWidget(
             self.lbl_reset_form,
@@ -553,6 +592,56 @@ class TabResi(ZoomTableMixin, QWidget):
         terapkan_popup_combobox_bawah(self)
         QTimer.singleShot(0, self._posisikan_tombol_clear_container)
 
+    def _terapkan_gaya_fokus_tombol_utama(self):
+        """Pertahankan gaya tombol dan tebalkan outline biru saat fokus."""
+        tombol = getattr(self, "btn_generate_simpan", None)
+        if tombol is None:
+            return
+
+        marker = "/* FOKUS_SIMPAN_BIRU */"
+
+        # Bersihkan marker versi lama maupun marker versi sekarang agar
+        # stylesheet fokus tidak menumpuk ketika tema/zoom diperbarui.
+        gaya_dasar = tombol.styleSheet()
+        gaya_dasar = gaya_dasar.split("/* FOKUS_SIMPAN_KONTRAS */", 1)[0]
+        gaya_dasar = gaya_dasar.split(marker, 1)[0].rstrip()
+
+        gaya_fokus = """
+        QPushButton:focus {
+            border: 3px solid #3b82f6;
+        }
+        """
+        tombol.setStyleSheet(
+            f"{gaya_dasar}\n{marker}\n{gaya_fokus}"
+        )
+
+    def _terapkan_pembatas_header_detail_barang(self, is_dark=False):
+        """Beri garis pembatas antarkolom pada kepala tabel Detail Barang."""
+        tabel = getattr(self, "table_items", None)
+        if tabel is None:
+            return
+
+        marker = "/* PEMBATAS_HEADER_DETAIL_BARANG */"
+
+        # Buang style tambahan versi sebelumnya agar tidak menumpuk saat
+        # tema atau tingkat zoom diterapkan ulang.
+        gaya_dasar = tabel.styleSheet().split(marker, 1)[0].rstrip()
+
+        # Menyerupai header tabel Buku Gudang: garis abu-abu kebiruan yang
+        # cukup tegas di antara setiap judul kolom.
+        warna_pembatas = "#64748b" if is_dark else "#a8b7c8"
+
+        gaya_pembatas = f"""
+        QHeaderView::section {{
+            border-right: 2px solid {warna_pembatas};
+            border-bottom: 1px solid {warna_pembatas};
+        }}
+        """
+
+        tabel.setStyleSheet(
+            f"{gaya_dasar}\n{marker}\n{gaya_pembatas}"
+        )
+
     def reset_form_input_manual(self, _link=None):
         """
         Membersihkan seluruh input transaksi setelah konfirmasi.
@@ -586,6 +675,7 @@ class TabResi(ZoomTableMixin, QWidget):
             self.group_tabel_container,
             kosongkan_tabel=True,
         )
+        self._reset_status_kalkulator_ongkir()
         reset_form_input_global(
             self.group_finance,
             indeks_combo_default=0,
@@ -713,6 +803,7 @@ class TabResi(ZoomTableMixin, QWidget):
 
     def bersihkan_detail_pembayaran(self):
         """Membersihkan ongkir dan mengembalikan ComboBox ke pilihan awal."""
+        self._reset_status_kalkulator_ongkir()
         reset_form_input_global(
             self.group_finance,
             indeks_combo_default=0,
@@ -777,6 +868,10 @@ class TabResi(ZoomTableMixin, QWidget):
             if widget is not None:
                 widget.setStyleSheet(qss)
 
+        # Style tema dapat menimpa stylesheet tombol. Tambahkan kembali
+        # indikator fokus setelah tema/zoom selesai diterapkan.
+        self._terapkan_gaya_fokus_tombol_utama()
+
         input_utama = [
             self.txt_pengirim, self.txt_hp_pengirim, self.txt_alamat_pengirim, self.txt_kota_pengirim,
             self.txt_penerima, self.txt_hp_penerima, self.txt_alamat_penerima,
@@ -794,6 +889,7 @@ class TabResi(ZoomTableMixin, QWidget):
             self.txt_search.setStyleSheet(styles['txt_search'])
 
         self.table_items.setStyleSheet(styles['group_tabel_container'])
+        self._terapkan_pembatas_header_detail_barang(is_dark)
 
         if zoom_berubah:
             self.table_items.verticalHeader().setDefaultSectionSize(42 + z)
@@ -1028,6 +1124,63 @@ class TabResi(ZoomTableMixin, QWidget):
         except Exception:
             logger.exception("Gagal memuat pencarian histori resi")
 
+    def _transaksi_kena_ppn(self):
+        """True bila Jenis Transaksi memakai PPN 1,1%."""
+        return self.cb_pajak.currentText().strip().upper().startswith("PAJAK")
+
+    def _total_setelah_ppn(self, subtotal):
+        """Hitung total akhir dan bulatkan ke satuan rupiah terdekat."""
+        subtotal_decimal = Decimal(str(subtotal or 0))
+        pengali = Decimal("1.011") if self._transaksi_kena_ppn() else Decimal("1")
+        return int(
+            (subtotal_decimal * pengali).quantize(
+                Decimal("1"),
+                rounding=ROUND_HALF_UP,
+            )
+        )
+
+    def _set_total_ongkir_programatis(self, nilai):
+        """Tampilkan total tanpa mengubahnya menjadi subtotal manual baru."""
+        self._sedang_set_total_ongkir = True
+        try:
+            with _blokir_signal_sementara(self.txt_total_ongkir):
+                if nilai is None or int(nilai) <= 0:
+                    self.txt_total_ongkir.clear()
+                else:
+                    self.txt_total_ongkir.setText(format_ke_rupiah(int(nilai)))
+        finally:
+            self._sedang_set_total_ongkir = False
+
+    def _catat_subtotal_ongkir_manual(self, teks):
+        """Catat angka yang benar-benar diketik admin sebagai subtotal."""
+        if self._sedang_set_total_ongkir:
+            return
+
+        self._mode_total_ongkir = "manual"
+        self._subtotal_manual_ongkir = max(0, rupiah_to_int(teks))
+
+    def _terapkan_ppn_ke_total_manual(self):
+        """Terapkan PPN setelah admin selesai mengisi Total Ongkir manual."""
+        if self._mode_total_ongkir != "manual":
+            return
+
+        total_akhir = self._total_setelah_ppn(
+            self._subtotal_manual_ongkir
+        )
+        self._set_total_ongkir_programatis(total_akhir)
+
+    def _perbarui_total_saat_jenis_transaksi_berubah(self, _teks=None):
+        """Hitung ulang total ketika pilihan PAJAK/NONPAJAK berubah."""
+        if self._mode_total_ongkir == "manual":
+            self._terapkan_ppn_ke_total_manual()
+        else:
+            self.kalkulator_finansial_otomatis()
+
+    def _reset_status_kalkulator_ongkir(self):
+        self._mode_total_ongkir = None
+        self._subtotal_manual_ongkir = 0
+        self._sedang_set_total_ongkir = False
+
     def kalkulator_finansial_otomatis(self):
         try:
             total_berat_kargo = 0.0
@@ -1050,20 +1203,168 @@ class TabResi(ZoomTableMixin, QWidget):
             kg_rate = float(rupiah_to_int(self.txt_ongkir_kg.text()))
             m3_rate = float(rupiah_to_int(self.txt_ongkir_m3.text()))
 
-            with _blokir_signal_sementara(self.txt_total_ongkir):
-                if kg_rate > 0 and total_berat_kargo > 0:
-                    total_calc = int(total_berat_kargo * kg_rate)
-                    self.txt_total_ongkir.setText(
-                        format_ke_rupiah(total_calc)
-                    )
-                elif m3_rate > 0 and total_volume_kargo > 0:
-                    total_calc = int(total_volume_kargo * m3_rate)
-                    self.txt_total_ongkir.setText(
-                        format_ke_rupiah(total_calc)
-                    )
+            subtotal_ongkir = None
+            if kg_rate > 0 and total_berat_kargo > 0:
+                subtotal_ongkir = total_berat_kargo * kg_rate
+            elif m3_rate > 0 and total_volume_kargo > 0:
+                subtotal_ongkir = total_volume_kargo * m3_rate
+
+            if subtotal_ongkir is not None:
+                self._mode_total_ongkir = "auto"
+                total_akhir = self._total_setelah_ppn(subtotal_ongkir)
+                self._set_total_ongkir_programatis(total_akhir)
+            elif self._mode_total_ongkir == "auto":
+                # Mencegah total lama tertinggal setelah berat/rate dihapus.
+                self._mode_total_ongkir = None
+                self._set_total_ongkir_programatis(None)
 
         except Exception:
             logger.exception("Gagal menghitung kalkulator finansial otomatis")
+
+    def _cari_posisi_widget_barang(self, widget):
+        """Cari posisi baris dan kolom QLineEdit yang berada di tabel barang."""
+        kolom_input = (
+            self.KOL_NAMA_BARANG,
+            self.KOL_KOLI,
+            self.KOL_BERAT,
+            self.KOL_CBM,
+        )
+
+        for row in range(self.table_items.rowCount()):
+            for kolom in kolom_input:
+                if self.table_items.cellWidget(row, kolom) is widget:
+                    return row, kolom
+        return None
+
+    def _fokuskan_widget_input(self, widget):
+        """Pindahkan fokus dengan alasan Tab dan pilih isi QLineEdit."""
+        if widget is None:
+            return
+
+        posisi = self._cari_posisi_widget_barang(widget)
+        if posisi is not None:
+            row, kolom = posisi
+            self.table_items.setCurrentCell(row, kolom)
+            self.table_items.scrollToItem(
+                self.table_items.item(row, self.KOL_NO)
+            )
+
+        widget.setFocus(Qt.TabFocusReason)
+        if isinstance(widget, QLineEdit):
+            widget.selectAll()
+
+    def eventFilter(self, obj, event):
+        """Atur Tab di Detail Barang agar tidak berputar di dalam tabel."""
+        if event.type() == QEvent.KeyPress:
+            key = event.key()
+
+            # Enter/Return menjalankan tombol yang sedang memiliki fokus.
+            # Event dikonsumsi agar aksi tidak terpanggil dua kali.
+            if key in (Qt.Key_Return, Qt.Key_Enter):
+                if obj is self.btn_generate_simpan:
+                    self.btn_generate_simpan.click()
+                    return True
+
+                if obj is self.lbl_reset_form:
+                    self.lbl_reset_form.click()
+                    return True
+
+            tombol_tab = key in (Qt.Key_Tab, Qt.Key_Backtab)
+
+            if tombol_tab:
+                mundur = (
+                    key == Qt.Key_Backtab
+                    or bool(event.modifiers() & Qt.ShiftModifier)
+                )
+
+                # Tab dari Metode Payment langsung ke tombol utama.
+                if obj is self.cb_payment and not mundur:
+                    QTimer.singleShot(
+                        0,
+                        lambda: self.btn_generate_simpan.setFocus(Qt.TabFocusReason),
+                    )
+                    return True
+
+                # Navigasi tombol utama dan Reset Form.
+                if obj is self.btn_generate_simpan:
+                    target = self.cb_payment if mundur else self.lbl_reset_form
+                    alasan = Qt.BacktabFocusReason if mundur else Qt.TabFocusReason
+                    QTimer.singleShot(
+                        0,
+                        lambda w=target, reason=alasan: w.setFocus(reason),
+                    )
+                    return True
+
+                # Shift+Tab dari Reset Form kembali ke tombol utama.
+                if obj is self.lbl_reset_form and mundur:
+                    QTimer.singleShot(
+                        0,
+                        lambda: self.btn_generate_simpan.setFocus(Qt.BacktabFocusReason),
+                    )
+                    return True
+
+                # Shift+Tab dari Ongkir/kg kembali ke volume baris terakhir.
+                if obj is self.txt_ongkir_kg and mundur:
+                    if self.table_items.rowCount() > 0:
+                        target = self.table_items.cellWidget(
+                            self.table_items.rowCount() - 1,
+                            self.KOL_CBM,
+                        )
+                        QTimer.singleShot(
+                            0,
+                            lambda w=target: self._fokuskan_widget_input(w),
+                        )
+                        return True
+
+                posisi = self._cari_posisi_widget_barang(obj)
+                if posisi is not None:
+                    row, kolom = posisi
+                    urutan_kolom = [
+                        self.KOL_NAMA_BARANG,
+                        self.KOL_KOLI,
+                        self.KOL_BERAT,
+                        self.KOL_CBM,
+                    ]
+                    indeks = urutan_kolom.index(kolom)
+                    target = None
+
+                    if mundur:
+                        if indeks > 0:
+                            target = self.table_items.cellWidget(
+                                row,
+                                urutan_kolom[indeks - 1],
+                            )
+                        elif row > 0:
+                            target = self.table_items.cellWidget(
+                                row - 1,
+                                self.KOL_CBM,
+                            )
+                        else:
+                            # Dari sel pertama, kembali ke input terakhir penerima.
+                            target = self.cb_provinsi
+                    else:
+                        if indeks < len(urutan_kolom) - 1:
+                            target = self.table_items.cellWidget(
+                                row,
+                                urutan_kolom[indeks + 1],
+                            )
+                        elif row < self.table_items.rowCount() - 1:
+                            target = self.table_items.cellWidget(
+                                row + 1,
+                                self.KOL_NAMA_BARANG,
+                            )
+                        else:
+                            # Tab dari volume baris terakhir menuju Detail Ongkir.
+                            target = self.txt_ongkir_kg
+
+                    if target is not None:
+                        QTimer.singleShot(
+                            0,
+                            lambda w=target: self._fokuskan_widget_input(w),
+                        )
+                        return True
+
+        return super().eventFilter(obj, event)
 
     def tambah_baris_barang(self):
         row_count = self.table_items.rowCount()
@@ -1100,6 +1401,8 @@ class TabResi(ZoomTableMixin, QWidget):
 
         for w in [txt_nama, txt_koli, txt_berat, txt_volume]:
             setup_placeholder_dinamis(w, self.current_theme == 'dark')
+            # Tangkap Tab/Shift+Tab sebelum diproses oleh QTableWidget.
+            w.installEventFilter(self)
 
         self.table_items.setCellWidget(row_count, self.KOL_NAMA_BARANG, txt_nama)
         self.table_items.setCellWidget(row_count, self.KOL_KOLI, txt_koli)
@@ -1149,10 +1452,19 @@ class TabResi(ZoomTableMixin, QWidget):
         kode_cabang = CURRENT_SESSION.get('kode_cabang', 'PUSAT')
 
         kamus_prefix = CURRENT_SESSION.get('aturan_prefix', {})
-        pref = kamus_prefix.get(cp, kamus_prefix.get("DEFAULT", "INV"))
+
+        prefix_default = (
+                str(CURRENT_SESSION.get("resi_prefix", "SYS")).strip().upper()
+                or "SYS"
+        )
+
+        pref = kamus_prefix.get(
+            cp,
+            kamus_prefix.get("DEFAULT", prefix_default),
+        )
 
         setting_suf = db_service.get_setting('kode_akhiran_pajak') or '-P'
-        suf = setting_suf if self.cb_pajak.currentText() == "PAJAK" else ""
+        suf = setting_suf if self._transaksi_kena_ppn() else ""
 
         try:
             base_number, max_num = db_service.ambil_sekuens_resi(kode_cabang, pref)
@@ -1248,7 +1560,8 @@ class TabResi(ZoomTableMixin, QWidget):
                 'pengirim_alamat': self.txt_alamat_pengirim.text().strip(),
                 'penerima_nama': self.txt_penerima.text().strip(), 'penerima_telp': self.txt_hp_penerima.text().strip(),
                 'penerima_alamat': self.txt_alamat_penerima.text().strip(),
-                'tipe_pajak': self.cb_pajak.currentText(), 'penerima_kota': ki, 'list_barang': list_barang_html,
+                'tipe_pajak': 'PAJAK' if self._transaksi_kena_ppn() else 'NONPAJAK',
+                'penerima_kota': ki, 'list_barang': list_barang_html,
                 'total_qty': str(tot_koli), 'total_berat': f"{tot_berat:.1f}",
                 'total_cbm': f"{tot_vol:.1f}",
                 'total_jumlah_ongkir': formatted_ongkir, 'ongkir_kg': fmt_ongkir_kg, 'ongkir_m3': fmt_ongkir_m3,
@@ -1351,6 +1664,7 @@ class TabResi(ZoomTableMixin, QWidget):
 
         reset_form_input_global(self.group_pengirim)
         reset_form_input_global(self.group_penerima)
+        self._reset_status_kalkulator_ongkir()
         reset_form_input_global(self.group_finance)
 
         with _blokir_signal_sementara(self.table_items):

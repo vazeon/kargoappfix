@@ -272,11 +272,59 @@ class TabBukuGudang(QWidget):
             if tabel.isRowHidden(row):
                 continue
 
-            no_resi = self._ambil_text_item(tabel, row, self.KOL_RESI)
-            pengirim = self._ambil_text_item(tabel, row, self.KOL_PENGIRIM)
-            penerima = self._ambil_text_item(tabel, row, self.KOL_PENERIMA)
-            ongkir = self._ambil_text_item(tabel, row, self.KOL_ONGKIR)
-            koli = self._ambil_text_item(tabel, row, self.KOL_KOLI)
+            no_resi = self._ambil_text_item(
+                tabel,
+                row,
+                self.KOL_RESI,
+            )
+
+            pengirim = self._ambil_text_item(
+                tabel,
+                row,
+                self.KOL_PENGIRIM,
+            )
+
+            penerima = self._ambil_text_item(
+                tabel,
+                row,
+                self.KOL_PENERIMA,
+            )
+
+            tujuan = self._ambil_text_item(
+                tabel,
+                row,
+                self.KOL_KOTA_TUJUAN,
+            )
+
+            nama_barang = self._ambil_text_item(
+                tabel,
+                row,
+                self.KOL_NAMA_BARANG,
+            )
+
+            koli = self._ambil_text_item(
+                tabel,
+                row,
+                self.KOL_KOLI,
+            )
+
+            berat = self._ambil_text_item(
+                tabel,
+                row,
+                self.KOL_BERAT,
+            )
+
+            kubik = self._ambil_text_item(
+                tabel,
+                row,
+                self.KOL_CBM,
+            )
+
+            ongkir = self._ambil_text_item(
+                tabel,
+                row,
+                self.KOL_ONGKIR,
+            )
 
             if not no_resi:
                 continue
@@ -296,9 +344,14 @@ class TabBukuGudang(QWidget):
                 peringatan_beda_pengirim_tampil = True
 
             list_resi_data.append({
-                'no_resi': no_resi,
-                'ket_buku_gudang': f"Tujuan: {penerima} ({koli} KOLI)",
-                'ongkir': ongkir if ongkir else "0"
+                "no_resi": no_resi,
+                "penerima": penerima,
+                "tujuan": tujuan,
+                "nama_barang": nama_barang,
+                "koli": koli or "0",
+                "berat": berat or "0",
+                "kubik": kubik or "0",
+                "ongkir": ongkir or "0",
             })
 
         if not list_resi_data:
@@ -512,7 +565,7 @@ class TabBukuGudang(QWidget):
             editor.setDate(QDate.currentDate())
         elif editor_type == "status":
             editor = QComboBox()
-            editor.addItems(["", "PROSES", "PERJALANAN", "SELESAI"])
+            editor.addItems(["", "DI GUDANG", "PERJALANAN", "SELESAI"])
         elif editor_type == "payment":
             editor = QComboBox()
             editor.addItems(["TF / INVOICE", "CASH"])

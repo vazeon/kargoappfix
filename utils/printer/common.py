@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import urllib.parse
 import webbrowser
 from typing import Optional
@@ -54,6 +55,27 @@ def pastikan_ekstensi(path: str, ekstensi: str) -> str:
     return path
 
 
+def _pasang_kertas_ncr(
+    printer: QPrinter,
+    margin_mm: float,
+) -> None:
+    """Memasang kertas NCR fisik 9,5 x 5,5 inci."""
+    ncr_size = QPageSize(
+        QSizeF(5.5, 9.5),
+        QPageSize.Inch,
+        "NCR 9.5 x 5.5 in",
+    )
+    printer.setPageSize(ncr_size)
+    printer.setOrientation(QPrinter.Landscape)
+    printer.setPageMargins(
+        margin_mm,
+        margin_mm,
+        margin_mm,
+        margin_mm,
+        QPrinter.Millimeter,
+    )
+
+
 def konfigurasi_printer(
     printer: QPrinter,
     jenis_dokumen: str,
@@ -64,30 +86,37 @@ def konfigurasi_printer(
     tipe = str(tipe_kertas or "A4").strip().upper()
 
     if jenis == JENIS_INVOICE:
-        printer.setPageSize(QPageSize(QPageSize.A4))
-        printer.setOrientation(QPrinter.Portrait)
-        printer.setPageMargins(8, 8, 8, 8, QPrinter.Millimeter)
+        if tipe == "NCR":
+            _pasang_kertas_ncr(printer, margin_mm=4)
+        else:
+            printer.setPageSize(QPageSize(QPageSize.A4))
+            printer.setOrientation(QPrinter.Portrait)
+            printer.setPageMargins(
+                8,
+                8,
+                8,
+                8,
+                QPrinter.Millimeter,
+            )
         return
 
     if jenis == JENIS_MANIFEST:
-        page_size = (
-            QPageSize(QPageSize.A5)
-            if tipe == "NCR"
-            else QPageSize(QPageSize.A4)
-        )
-        printer.setPageSize(page_size)
-        printer.setOrientation(QPrinter.Landscape)
-        printer.setPageMargins(2, 2, 2, 2, QPrinter.Millimeter)
+        if tipe == "NCR":
+            _pasang_kertas_ncr(printer, margin_mm=2)
+        else:
+            printer.setPageSize(QPageSize(QPageSize.A4))
+            printer.setOrientation(QPrinter.Landscape)
+            printer.setPageMargins(
+                5,
+                5,
+                5,
+                5,
+                QPrinter.Millimeter,
+            )
         return
 
-    # Nota/resi NCR ukuran 5,5 x 9,5 inci.
-    ncr_size = QPageSize(
-        QSizeF(139.7, 241.3),
-        QPageSize.Millimeter,
-    )
-    printer.setPageSize(ncr_size)
-    printer.setOrientation(QPrinter.Landscape)
-    printer.setPageMargins(2, 2, 2, 2, QPrinter.Millimeter)
+    # Resi selalu memakai nota NCR 9,5 x 5,5 inci.
+    _pasang_kertas_ncr(printer, margin_mm=2)
 
 
 def buat_printer(
@@ -97,7 +126,7 @@ def buat_printer(
 ) -> QPrinter:
     """Membuat objek QPrinter yang siap digunakan."""
     printer = QPrinter()
-    printer.setResolution(int(resolusi))
+    printer.setResolution(max(72, int(resolusi)))
     konfigurasi_printer(
         printer,
         jenis_dokumen,
@@ -106,30 +135,66 @@ def buat_printer(
     return printer
 
 
+def bersihkan_nama_file(
+    nama: str,
+    default: str = "dokumen",
+) -> str:
+    """Membersihkan karakter yang tidak valid untuk nama file Windows."""
+    nama_bersih = re.sub(
+        r'[<>:"/\\|?*\x00-\x1f]+',
+        "_",
+        str(nama or "").strip(),
+    )
+    nama_bersih = re.sub(r"\s+", " ", nama_bersih)
+    nama_bersih = nama_bersih.strip(" ._")
+    return nama_bersih or default
+
+
+def ukuran_area_cetak(
+    printer: QPrinter,
+) -> QSizeF:
+    """
+    Mengambil area cetak dalam point (1/72 inci).
+
+    QTextDocument menggunakan satuan layout yang setara point. Menggunakan
+    lebar/tinggi pixel printer membuat hasil PDF berubah ukuran ketika DPI
+    printer berbeda.
+    """
+    rect = printer.pageRect(QPrinter.Point)
+    lebar = float(rect.width())
+    tinggi = float(rect.height())
+
+    if lebar <= 0 or tinggi <= 0:
+        # Fallback A4 dalam point.
+        return QSizeF(595.0, 842.0)
+
+    return QSizeF(lebar, tinggi)
+
+
+def sinkronkan_ukuran_dokumen(
+    document: QTextDocument,
+    printer: QPrinter,
+) -> None:
+    """Menyamakan ukuran QTextDocument dengan area cetak printer."""
+    document.setPageSize(ukuran_area_cetak(printer))
+
+
 def buat_dokumen_html(
     html_content: str,
     printer: QPrinter,
     margin: float = 0,
 ) -> QTextDocument:
-    """Membuat QTextDocument dari HTML dengan font aplikasi."""
+    """Membuat QTextDocument HTML dengan ukuran yang tidak bergantung DPI."""
     document = QTextDocument()
     document.setDefaultFont(QFont(get_master_font()))
     document.setDocumentMargin(float(margin))
-
-    if printer.orientation() == QPrinter.Landscape:
-        lebar = max(printer.width(), printer.height())
-        tinggi = min(printer.width(), printer.height())
-    else:
-        lebar = min(printer.width(), printer.height())
-        tinggi = max(printer.width(), printer.height())
-
-    document.setPageSize(QSizeF(lebar, tinggi))
+    sinkronkan_ukuran_dokumen(document, printer)
     document.setHtml(str(html_content or ""))
     return document
 
 
 class JendelaPreviewCustom(QDialog):
-    """Preview bersama untuk Resi dan Manifest."""
+    """Preview bersama untuk Resi, Manifest, dan Invoice."""
 
     def __init__(
         self,
@@ -156,6 +221,10 @@ class JendelaPreviewCustom(QDialog):
 
         # Alias untuk kompatibilitas dengan kode lama.
         self.no_resi = self.nomor_dokumen
+        sinkronkan_ukuran_dokumen(
+            self.doc_terikat,
+            self.printer_terikat,
+        )
 
         nama_perusahaan = str(
             DATA_CLIENT.get(
@@ -412,6 +481,10 @@ class JendelaPreviewCustom(QDialog):
             self.jenis_dokumen,
             self.tipe_kertas,
         )
+        sinkronkan_ukuran_dokumen(
+            self.doc_terikat,
+            self.printer_terikat,
+        )
         self.widget_preview.updatePreview()
 
     def buka_dialog_setting_printer(self) -> None:
@@ -421,11 +494,16 @@ class JendelaPreviewCustom(QDialog):
         )
 
         if dialog.exec_() == QPrintDialog.Accepted:
-            self.doc_terikat.setPageSize(
-                QSizeF(
-                    self.printer_terikat.width(),
-                    self.printer_terikat.height(),
-                )
+            # Ukuran dokumen tetap mengikuti jenis dokumen, sedangkan
+            # pilihan printer/copies dari dialog tetap dipertahankan.
+            konfigurasi_printer(
+                self.printer_terikat,
+                self.jenis_dokumen,
+                self.tipe_kertas,
+            )
+            sinkronkan_ukuran_dokumen(
+                self.doc_terikat,
+                self.printer_terikat,
             )
             self.widget_preview.updatePreview()
 
@@ -437,6 +515,10 @@ class JendelaPreviewCustom(QDialog):
             printer_target,
             self.jenis_dokumen,
             self.tipe_kertas,
+        )
+        sinkronkan_ukuran_dokumen(
+            self.doc_terikat,
+            printer_target,
         )
         self.doc_terikat.print_(printer_target)
 
@@ -450,14 +532,41 @@ class JendelaPreviewCustom(QDialog):
         )
 
     def aksi_cetak_fisik(self) -> None:
-        konfigurasi_printer(
-            self.printer_terikat,
-            self.jenis_dokumen,
-            self.tipe_kertas,
-        )
-        self.doc_terikat.print_(
-            self.printer_terikat
-        )
+        nama_printer = self.cb_printers.currentText().strip()
+
+        if not nama_printer:
+            QMessageBox.warning(
+                self,
+                "Printer Tidak Tersedia",
+                "Tidak ada printer yang terdeteksi pada komputer ini.",
+            )
+            return
+
+        try:
+            self.printer_terikat.setPrinterName(nama_printer)
+            konfigurasi_printer(
+                self.printer_terikat,
+                self.jenis_dokumen,
+                self.tipe_kertas,
+            )
+            sinkronkan_ukuran_dokumen(
+                self.doc_terikat,
+                self.printer_terikat,
+            )
+            self.doc_terikat.print_(
+                self.printer_terikat
+            )
+            QMessageBox.information(
+                self,
+                "Dokumen Dikirim",
+                f"Dokumen dikirim ke printer:\n{nama_printer}",
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Gagal Mencetak",
+                str(exc),
+            )
 
     def _prefix_nama_file(self) -> str:
         if self.jenis_dokumen == JENIS_MANIFEST:
@@ -470,9 +579,13 @@ class JendelaPreviewCustom(QDialog):
 
     def aksi_simpan_pdf(self) -> None:
         prefix = self._prefix_nama_file()
+        nomor_aman = bersihkan_nama_file(
+            self.nomor_dokumen,
+            default="",
+        )
         default_name = (
-            f"{prefix}_{self.nomor_dokumen}.pdf"
-            if self.nomor_dokumen
+            f"{prefix}_{nomor_aman}.pdf"
+            if nomor_aman
             else f"{prefix}.pdf"
         )
 
@@ -506,7 +619,16 @@ class JendelaPreviewCustom(QDialog):
                 self.jenis_dokumen,
                 self.tipe_kertas,
             )
-            self.doc_terikat.print_(pdf_printer)
+
+            ukuran_lama = self.doc_terikat.pageSize()
+            try:
+                sinkronkan_ukuran_dokumen(
+                    self.doc_terikat,
+                    pdf_printer,
+                )
+                self.doc_terikat.print_(pdf_printer)
+            finally:
+                self.doc_terikat.setPageSize(ukuran_lama)
 
             QMessageBox.information(
                 self,
@@ -526,9 +648,13 @@ class JendelaPreviewCustom(QDialog):
 
     def aksi_simpan_gambar(self) -> None:
         prefix = self._prefix_nama_file()
+        nomor_aman = bersihkan_nama_file(
+            self.nomor_dokumen,
+            default="",
+        )
         default_name = (
-            f"{prefix}_{self.nomor_dokumen}.png"
-            if self.nomor_dokumen
+            f"{prefix}_{nomor_aman}.png"
+            if nomor_aman
             else f"{prefix}.png"
         )
 
@@ -559,9 +685,23 @@ class JendelaPreviewCustom(QDialog):
             )
 
         try:
-            ukuran = self.doc_terikat.size().toSize()
-            lebar = max(1, ukuran.width())
-            tinggi = max(1, ukuran.height())
+            ukuran_dokumen = self.doc_terikat.size()
+            lebar_point = max(1.0, float(ukuran_dokumen.width()))
+            tinggi_point = max(1.0, float(ukuran_dokumen.height()))
+
+            # 2 pixel per point menghasilkan gambar tajam tanpa membuat
+            # alokasi memori berlebihan. Skala diturunkan bila terlalu besar.
+            skala = 2.0
+            batas_pixel = 12000.0
+            skala = min(
+                skala,
+                batas_pixel / lebar_point,
+                batas_pixel / tinggi_point,
+            )
+            skala = max(0.25, skala)
+
+            lebar = max(1, int(round(lebar_point * skala)))
+            tinggi = max(1, int(round(tinggi_point * skala)))
 
             gambar = QImage(
                 lebar,
@@ -571,6 +711,7 @@ class JendelaPreviewCustom(QDialog):
             gambar.fill(Qt.white)
 
             painter = QPainter(gambar)
+            painter.scale(skala, skala)
             self.doc_terikat.drawContents(painter)
             painter.end()
 

@@ -36,7 +36,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from config import CURRENT_SESSION
+from config import CURRENT_SESSION, muat_pengaturan_sistem
 import services.database_service as db_service
 from themes.modules.invoice import get_invoice_styles
 
@@ -65,13 +65,59 @@ from utils.widget_helpers import blokir_signal_sementara
 # ==========================================================
 INVOICE_TEMPLATES = {
     "Standar": {
-        "version": 2,
+        "version": 3,
         "layout": "standard",
         "amount_key": "amount",
         "columns": [
-            {"key": "resi", "title": "NO RESI", "type": "text", "width": 130},
-            {"key": "description", "title": "KETERANGAN", "type": "text", "width": 380, "stretch": True},
-            {"key": "amount", "title": "NOMINAL (Rp)", "type": "currency", "width": 150},
+            {
+                "key": "no",
+                "title": "NO",
+                "type": "integer",
+                "width": 45,
+            },
+            {
+                "key": "resi",
+                "title": "RESI",
+                "type": "text",
+                "width": 105,
+            },
+            {
+                "key": "destination",
+                "title": "TUJUAN",
+                "type": "text",
+                "width": 135,
+            },
+            {
+                "key": "description",
+                "title": "NAMA BARANG",
+                "type": "text",
+                "width": 210,
+                "stretch": True,
+            },
+            {
+                "key": "package",
+                "title": "KOLI",
+                "type": "decimal",
+                "width": 65,
+            },
+            {
+                "key": "weight",
+                "title": "BERAT (KG)",
+                "type": "decimal",
+                "width": 85,
+            },
+            {
+                "key": "volume",
+                "title": "KUBIK (M³)",
+                "type": "decimal",
+                "width": 90,
+            },
+            {
+                "key": "amount",
+                "title": "ONGKIR (Rp)",
+                "type": "currency",
+                "width": 125,
+            },
         ],
     },
     "Logistik Berat": {
@@ -344,52 +390,96 @@ class InvoiceSheet(QTableWidget):
 # DIALOG PENGATURAN KOLOM
 # ==========================================================
 class ColumnDesignerDialog(QDialog):
-    TYPES = ["text", "integer", "decimal", "currency", "date"]
+    """Pengaturan kolom Invoice versi ramah pengguna."""
+
+    FORMAT_LABEL_TO_TYPE = {
+        "Teks": "text",
+        "Angka Bulat": "integer",
+        "Angka Desimal": "decimal",
+        "Rupiah": "currency",
+        "Tanggal": "date",
+    }
+    TYPE_TO_FORMAT_LABEL = {
+        value: key for key, value in FORMAT_LABEL_TO_TYPE.items()
+    }
+
+    SIZE_LABEL_TO_WIDTH = {
+        "Kecil": 70,
+        "Sedang": 110,
+        "Lebar": 200,
+        "Sangat Lebar": 360,
+    }
+
+    COLUMN_PRESETS = [
+        ("NOMOR", "no", "integer", 70),
+        ("RESI", "resi", "text", 110),
+        ("TUJUAN", "destination", "text", 200),
+        ("NAMA BARANG", "description", "text", 360),
+        ("KOLI", "package", "decimal", 70),
+        ("QTY", "quantity", "decimal", 70),
+        ("BERAT", "weight", "decimal", 110),
+        ("KUBIK", "volume", "decimal", 110),
+        ("TARIF", "tariff", "currency", 110),
+        ("ONGKIR", "amount", "currency", 140),
+        ("KETERANGAN", "notes", "text", 360),
+        ("TANGGAL KAPAL", "ship_date", "date", 110),
+        ("NOMOR PO", "po_number", "text", 110),
+    ]
 
     def __init__(self, columns, amount_key, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Atur Kolom Invoice")
-        self.resize(760, 430)
+        self.setWindowTitle("Atur Tampilan Kolom Invoice")
+        self.resize(760, 480)
+
         self.result_columns = None
         self.result_amount_key = None
+        self.initial_columns = deepcopy(columns or [])
+        self.initial_amount_key = str(amount_key or "").strip()
 
         layout = QVBoxLayout(self)
+
+        title = QLabel("Susun Kolom yang Ditampilkan pada Invoice")
+        title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        layout.addWidget(title)
+
         info = QLabel(
-            "Judul adalah nama kolom yang terlihat. Key dipakai untuk penyimpanan data. "
-            "Tandai satu kolom sebagai TOTAL agar subtotal dihitung dari kolom tersebut."
+            "Ubah nama kolom bila diperlukan, lalu pilih format isi dan "
+            "ukurannya. Pilih <b>Ya</b> pada satu kolom Rupiah yang akan "
+            "dijumlahkan sebagai subtotal."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["JUDUL", "KEY", "TIPE", "LEBAR", "TOTAL?"])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels([
+            "NAMA KOLOM",
+            "FORMAT ISI",
+            "UKURAN KOLOM",
+            "MASUK TOTAL",
+        ])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         layout.addWidget(self.table)
 
-        for column in columns:
-            self._append_row(
-                title=column.get("title", ""),
-                key=column.get("key", ""),
-                data_type=column.get("type", "text"),
-                width=column.get("width", 120),
-                is_amount=column.get("key") == amount_key,
-            )
+        self._load_columns(self.initial_columns, self.initial_amount_key)
 
         toolbar = QHBoxLayout()
-        btn_add = QPushButton("+ Tambah Kolom")
-        btn_remove = QPushButton("Hapus Kolom")
-        btn_up = QPushButton("Naik")
-        btn_down = QPushButton("Turun")
-        toolbar.addWidget(btn_add)
-        toolbar.addWidget(btn_remove)
-        toolbar.addWidget(btn_up)
-        toolbar.addWidget(btn_down)
+        self.btn_add = QPushButton("+ Tambah Kolom")
+        self.btn_remove = QPushButton("Hapus")
+        self.btn_up = QPushButton("Naik")
+        self.btn_down = QPushButton("Turun")
+        self.btn_restore = QPushButton("Pulihkan Susunan Awal")
+        toolbar.addWidget(self.btn_add)
+        toolbar.addWidget(self.btn_remove)
+        toolbar.addWidget(self.btn_up)
+        toolbar.addWidget(self.btn_down)
         toolbar.addStretch()
+        toolbar.addWidget(self.btn_restore)
         layout.addLayout(toolbar)
 
         actions = QHBoxLayout()
@@ -400,12 +490,26 @@ class ColumnDesignerDialog(QDialog):
         actions.addWidget(btn_ok)
         layout.addLayout(actions)
 
-        btn_add.clicked.connect(lambda: self._append_row("KOLOM BARU", "kolom_baru", "text", 120, False))
-        btn_remove.clicked.connect(self._remove_current_row)
-        btn_up.clicked.connect(lambda: self._move_row(-1))
-        btn_down.clicked.connect(lambda: self._move_row(1))
+        self._setup_add_menu()
+        self.btn_remove.clicked.connect(self._remove_current_row)
+        self.btn_up.clicked.connect(lambda: self._move_row(-1))
+        self.btn_down.clicked.connect(lambda: self._move_row(1))
+        self.btn_restore.clicked.connect(self._restore_initial_columns)
         btn_cancel.clicked.connect(self.reject)
         btn_ok.clicked.connect(self._validate_and_accept)
+
+    def _setup_add_menu(self):
+        menu = QMenu(self)
+        for title, key, data_type, width in self.COLUMN_PRESETS:
+            action = menu.addAction(title)
+            action.triggered.connect(
+                lambda _checked=False, preset=(title, key, data_type, width):
+                self._add_preset(preset)
+            )
+        menu.addSeparator()
+        custom_action = menu.addAction("KOLOM LAINNYA...")
+        custom_action.triggered.connect(self._add_custom_column)
+        self.btn_add.setMenu(menu)
 
     @staticmethod
     def _slug_key(value):
@@ -413,57 +517,201 @@ class ColumnDesignerDialog(QDialog):
         value = re.sub(r"[^a-z0-9]+", "_", value).strip("_")
         return value or "kolom"
 
+    @classmethod
+    def _size_label_from_width(cls, width):
+        try:
+            width = int(width)
+        except (TypeError, ValueError):
+            width = 110
+        return min(
+            cls.SIZE_LABEL_TO_WIDTH,
+            key=lambda label: abs(cls.SIZE_LABEL_TO_WIDTH[label] - width),
+        )
+
+    def _load_columns(self, columns, amount_key):
+        self.table.setRowCount(0)
+        for column in columns or []:
+            self._append_row(
+                title=column.get("title", ""),
+                key=column.get("key", ""),
+                data_type=column.get("type", "text"),
+                width=column.get("width", 110),
+                is_amount=column.get("key") == amount_key,
+            )
+        if self.table.rowCount() == 0:
+            self._append_row("KETERANGAN", "description", "text", 360, False)
+            self._append_row("JUMLAH", "amount", "currency", 140, True)
+
     def _append_row(self, title, key, data_type, width, is_amount):
         row = self.table.rowCount()
         self.table.insertRow(row)
 
-        # PENGGUNAAN HELPER
-        self.table.setItem(row, 0, buat_tabel_item(title))
-        self.table.setItem(row, 1, buat_tabel_item(key))
+        title_item = buat_tabel_item(str(title or "KOLOM BARU").strip().upper())
+        title_item.setData(Qt.UserRole, str(key or "").strip())
+        self.table.setItem(row, 0, title_item)
 
-        combo = QComboBox()
-        combo.addItems(self.TYPES)
-        combo.setCurrentText(data_type if data_type in self.TYPES else "text")
-        self.table.setCellWidget(row, 2, combo)
+        format_combo = QComboBox()
+        format_combo.addItems(list(self.FORMAT_LABEL_TO_TYPE.keys()))
+        format_combo.setCurrentText(
+            self.TYPE_TO_FORMAT_LABEL.get(data_type, "Teks")
+        )
+        self.table.setCellWidget(row, 1, format_combo)
 
-        self.table.setItem(row, 3, buat_tabel_item(width))
-        self.table.setItem(row, 4, buat_tabel_item("YA" if is_amount else ""))
+        size_combo = QComboBox()
+        size_combo.addItems(list(self.SIZE_LABEL_TO_WIDTH.keys()))
+        size_combo.setCurrentText(self._size_label_from_width(width))
+        self.table.setCellWidget(row, 2, size_combo)
+
+        total_combo = QComboBox()
+        total_combo.addItems(["Tidak", "Ya"])
+        total_combo.setCurrentText("Ya" if is_amount else "Tidak")
+        total_combo.currentTextChanged.connect(
+            lambda value, combo=total_combo: self._handle_total_changed(combo, value)
+        )
+        self.table.setCellWidget(row, 3, total_combo)
+        self.table.setCurrentCell(row, 0)
+
+    def _find_widget_row(self, widget, column):
+        for row in range(self.table.rowCount()):
+            if self.table.cellWidget(row, column) is widget:
+                return row
+        return -1
+
+    def _handle_total_changed(self, source_combo, value):
+        if str(value).strip().lower() != "ya":
+            return
+        source_row = self._find_widget_row(source_combo, 3)
+        if source_row < 0:
+            return
+        for row in range(self.table.rowCount()):
+            combo = self.table.cellWidget(row, 3)
+            if combo is None or combo is source_combo:
+                continue
+            combo.blockSignals(True)
+            combo.setCurrentText("Tidak")
+            combo.blockSignals(False)
+        format_combo = self.table.cellWidget(source_row, 1)
+        if format_combo:
+            format_combo.setCurrentText("Rupiah")
+
+    def _existing_key_row(self, key):
+        normalized_key = str(key or "").strip()
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            row_key = str(item.data(Qt.UserRole) or "").strip() if item else ""
+            if row_key == normalized_key:
+                return row
+        return -1
+
+    def _add_preset(self, preset):
+        title, key, data_type, width = preset
+        existing_row = self._existing_key_row(key)
+        if existing_row >= 0:
+            self.table.setCurrentCell(existing_row, 0)
+            QMessageBox.information(
+                self,
+                "Kolom Sudah Ada",
+                f"Kolom {title} sudah terdapat pada susunan invoice.",
+            )
+            return
+        self._append_row(title, key, data_type, width, key == "amount")
+
+    def _add_custom_column(self):
+        nomor = 1
+        while self._existing_key_row(f"kolom_baru_{nomor}") >= 0:
+            nomor += 1
+        self._append_row(
+            "KOLOM BARU",
+            f"kolom_baru_{nomor}",
+            "text",
+            110,
+            False,
+        )
+        item = self.table.item(self.table.rowCount() - 1, 0)
+        if item:
+            self.table.editItem(item)
 
     def _remove_current_row(self):
         row = self.table.currentRow()
-        if row >= 0 and self.table.rowCount() > 1:
-            self.table.removeRow(row)
+        if row < 0:
+            QMessageBox.information(self, "Pilih Kolom", "Pilih kolom yang ingin dihapus.")
+            return
+        if self.table.rowCount() <= 1:
+            QMessageBox.warning(
+                self,
+                "Kolom Tidak Bisa Dihapus",
+                "Invoice harus memiliki minimal satu kolom.",
+            )
+            return
+        self.table.removeRow(row)
+        if self.table.rowCount() > 0:
+            self.table.setCurrentCell(min(row, self.table.rowCount() - 1), 0)
 
     def _move_row(self, offset):
         source = self.table.currentRow()
         target = source + offset
         if source < 0 or target < 0 or target >= self.table.rowCount():
             return
-
-        row_data = self._read_row(source)
+        source_data = self._read_row(source)
         target_data = self._read_row(target)
         self._write_row(source, target_data)
-        self._write_row(target, row_data)
+        self._write_row(target, source_data)
         self.table.setCurrentCell(target, 0)
 
     def _read_row(self, row):
-        combo = self.table.cellWidget(row, 2)
+        title_item = self.table.item(row, 0)
+        format_combo = self.table.cellWidget(row, 1)
+        size_combo = self.table.cellWidget(row, 2)
+        total_combo = self.table.cellWidget(row, 3)
         return {
-            "title": self.table.item(row, 0).text() if self.table.item(row, 0) else "",
-            "key": self.table.item(row, 1).text() if self.table.item(row, 1) else "",
-            "type": combo.currentText() if combo else "text",
-            "width": self.table.item(row, 3).text() if self.table.item(row, 3) else "120",
-            "amount": self.table.item(row, 4).text() if self.table.item(row, 4) else "",
+            "title": title_item.text() if title_item else "",
+            "key": str(title_item.data(Qt.UserRole) or "") if title_item else "",
+            "type": self.FORMAT_LABEL_TO_TYPE.get(
+                format_combo.currentText() if format_combo else "Teks",
+                "text",
+            ),
+            "width": self.SIZE_LABEL_TO_WIDTH.get(
+                size_combo.currentText() if size_combo else "Sedang",
+                110,
+            ),
+            "amount": total_combo.currentText() == "Ya" if total_combo else False,
         }
 
     def _write_row(self, row, data):
-        self.table.setItem(row, 0, buat_tabel_item(data["title"]))
-        self.table.setItem(row, 1, buat_tabel_item(data["key"]))
-        combo = self.table.cellWidget(row, 2)
-        if combo:
-            combo.setCurrentText(data["type"])
-        self.table.setItem(row, 3, buat_tabel_item(data["width"]))
-        self.table.setItem(row, 4, buat_tabel_item(data["amount"]))
+        title_item = buat_tabel_item(str(data.get("title", "")).strip().upper())
+        title_item.setData(Qt.UserRole, str(data.get("key", "")).strip())
+        self.table.setItem(row, 0, title_item)
+
+        format_combo = QComboBox()
+        format_combo.addItems(list(self.FORMAT_LABEL_TO_TYPE.keys()))
+        format_combo.setCurrentText(
+            self.TYPE_TO_FORMAT_LABEL.get(data.get("type", "text"), "Teks")
+        )
+        self.table.setCellWidget(row, 1, format_combo)
+
+        size_combo = QComboBox()
+        size_combo.addItems(list(self.SIZE_LABEL_TO_WIDTH.keys()))
+        size_combo.setCurrentText(self._size_label_from_width(data.get("width", 110)))
+        self.table.setCellWidget(row, 2, size_combo)
+
+        total_combo = QComboBox()
+        total_combo.addItems(["Tidak", "Ya"])
+        total_combo.setCurrentText("Ya" if data.get("amount") else "Tidak")
+        total_combo.currentTextChanged.connect(
+            lambda value, combo=total_combo: self._handle_total_changed(combo, value)
+        )
+        self.table.setCellWidget(row, 3, total_combo)
+
+    def _restore_initial_columns(self):
+        answer = QMessageBox.question(
+            self,
+            "Pulihkan Susunan Awal",
+            "Kembalikan susunan kolom seperti saat dialog ini dibuka?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer == QMessageBox.Yes:
+            self._load_columns(self.initial_columns, self.initial_amount_key)
 
     def _validate_and_accept(self):
         columns = []
@@ -472,44 +720,78 @@ class ColumnDesignerDialog(QDialog):
 
         for row in range(self.table.rowCount()):
             raw = self._read_row(row)
-            title = raw["title"].strip()
-            key = self._slug_key(raw["key"] or title)
+            title = str(raw["title"]).strip().upper()
             if not title:
-                QMessageBox.warning(self, "Kolom Belum Lengkap", f"Judul pada baris {row + 1} masih kosong.")
+                QMessageBox.warning(
+                    self,
+                    "Nama Kolom Belum Diisi",
+                    f"Nama kolom pada baris {row + 1} masih kosong.",
+                )
+                self.table.setCurrentCell(row, 0)
                 return
+
+            key = str(raw["key"] or "").strip()
+            if not key or key.startswith("kolom_baru_"):
+                key = self._slug_key(title)
+
             if key in used_keys:
-                QMessageBox.warning(self, "Key Ganda", f"Key '{key}' digunakan lebih dari satu kali.")
+                QMessageBox.warning(
+                    self,
+                    "Kolom Sama",
+                    f"Kolom {title} memiliki penyimpanan yang sama dengan kolom lain.",
+                )
+                self.table.setCurrentCell(row, 0)
                 return
             used_keys.add(key)
 
-            try:
-                width = max(45, min(int(raw["width"]), 800))
-            except (TypeError, ValueError):
-                width = 120
+            data_type = raw["type"]
+            width = int(raw["width"])
+            if raw["amount"]:
+                if amount_key is not None:
+                    QMessageBox.warning(
+                        self,
+                        "Kolom Total Ganda",
+                        "Pilih hanya satu kolom yang masuk ke perhitungan subtotal.",
+                    )
+                    return
+                amount_key = key
+                data_type = "currency"
 
             column = {
                 "key": key,
-                "title": title.upper(),
-                "type": raw["type"],
+                "title": title,
+                "type": data_type,
                 "width": width,
             }
-            if raw["type"] == "text" and width >= 220:
+            if data_type == "text" and width >= 200:
                 column["stretch"] = True
             columns.append(column)
 
-            if raw["amount"].strip().upper() in {"YA", "Y", "YES", "1", "TOTAL"}:
-                if amount_key is not None:
-                    QMessageBox.warning(self, "Kolom Total", "Cukup tandai satu kolom sebagai TOTAL.")
-                    return
-                amount_key = key
-
         if not columns:
-            QMessageBox.warning(self, "Kolom Kosong", "Minimal harus ada satu kolom.")
+            QMessageBox.warning(self, "Kolom Kosong", "Invoice harus memiliki minimal satu kolom.")
             return
 
         if amount_key is None:
-            amount_key = columns[-1]["key"]
-            columns[-1]["type"] = "currency"
+            rupiah_rows = [
+                index for index, column in enumerate(columns)
+                if column.get("type") == "currency"
+            ]
+            if len(rupiah_rows) == 1:
+                amount_key = columns[rupiah_rows[0]]["key"]
+            elif not rupiah_rows:
+                QMessageBox.warning(
+                    self,
+                    "Kolom Total Belum Dipilih",
+                    "Ubah satu kolom menjadi format Rupiah, lalu pilih Ya pada Masuk Total.",
+                )
+                return
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Kolom Total Belum Dipilih",
+                    "Pilih Ya pada satu kolom Rupiah yang akan dijumlahkan sebagai subtotal.",
+                )
+                return
 
         self.result_columns = columns
         self.result_amount_key = amount_key
@@ -761,7 +1043,7 @@ class TabInvoice(ZoomTableMixin, QWidget):
         # MEMUAT LEBAR KOLOM HISTORI
         self.load_lebar_kolom_histori(self.tabel_histori_invoice)
         self.tabel_histori_invoice.horizontalHeader().sectionResized.connect(
-            lambda: self.simpan_lebar_kolom_histori(self.tabel_histori_invoice)
+            lambda *_: self.simpan_lebar_kolom_histori(self.tabel_histori_invoice)
         )
 
         self.apply_template(preserve_rows=False)
@@ -1055,34 +1337,59 @@ class TabInvoice(ZoomTableMixin, QWidget):
         self.lbl_pajak_nominal.setText(f"{tax_name}: Rp {format_ke_rupiah(tax_value)}")
         self.lbl_total_tagihan.setText(f"TOTAL TAGIHAN: Rp {format_ke_rupiah(self.total_invoice_aktif)}")
 
+    @staticmethod
+    def _muat_data_perusahaan():
+        """
+        Mengambil konfigurasi perusahaan dari database aktif.
+
+        muat_pengaturan_sistem() sudah menggabungkan nilai database dengan
+        default white-label, sehingga tidak perlu melakukan merge ulang.
+        """
+        try:
+            data = muat_pengaturan_sistem()
+            return data if isinstance(data, dict) else {}
+        except Exception as exc:
+            print(f"Gagal memuat data perusahaan untuk invoice: {exc}")
+            return {}
+
+    def _set_rekening_otomatis(self, tandai_perubahan=True):
+        """Mengisi payment info berdasarkan jenis pajak yang dipilih."""
+        pengaturan = self._muat_data_perusahaan()
+        pajak_dipilih = self.cmb_pajak.currentText().strip().upper()
+
+        key_rekening = (
+            "rekening_nonpajak"
+            if pajak_dipilih == "NONPAJAK"
+            else "rekening_pajak"
+        )
+        list_rekening = pengaturan.get(key_rekening, [])
+
+        if isinstance(list_rekening, list):
+            teks_rekening = " | ".join(
+                str(item).strip()
+                for item in list_rekening
+                if str(item).strip()
+            )
+        elif isinstance(list_rekening, str):
+            teks_rekening = list_rekening.strip()
+        else:
+            teks_rekening = ""
+
+        with blokir_signal_sementara(self.txt_payment_info):
+            self.txt_payment_info.setText(teks_rekening)
+
+        self.hitung_ulang_total_tagihan()
+
+        if tandai_perubahan:
+            self._mark_dirty()
+
     def ubah_rekening_otomatis(self, *_):
         if self._loading_invoice:
             return
 
-        try:
-            from config import DEFAULT_CLIENT_DATA, muat_pengaturan_sistem
-
-            pengaturan = DEFAULT_CLIENT_DATA.copy()
-            pengaturan.update(muat_pengaturan_sistem())
-
-            pajak_dipilih = self.cmb_pajak.currentText()
-
-            if pajak_dipilih == "NONPAJAK":
-                list_rekening = pengaturan.get("rekening_nonpajak", [])
-            else:
-                list_rekening = pengaturan.get("rekening_pajak", [])
-
-            if isinstance(list_rekening, list) and list_rekening:
-                teks_rekening = " | ".join(list_rekening)
-            elif isinstance(list_rekening, str):
-                teks_rekening = list_rekening
-            else:
-                teks_rekening = ""
-
-            self.txt_payment_info.setText(teks_rekening)
-
-        except ImportError:
-            pass
+        self._set_rekening_otomatis(
+            tandai_perubahan=True,
+        )
 
     def terima_data_baru(self, nama_client, list_resi_data):
         self.buat_invoice_baru()
@@ -1097,16 +1404,41 @@ class TabInvoice(ZoomTableMixin, QWidget):
             with blokir_signal_sementara(self.tabel_item_invoice):
                 self.tabel_item_invoice.setRowCount(0)
 
-                for data in list_resi_data:
+                for nomor, data in enumerate(list_resi_data, start=1):
                     row = self.tabel_item_invoice.rowCount()
                     self.tabel_item_invoice.insertRow(row)
+
                     values = {
-                        "resi": str(data.get("no_resi", "")).strip().upper(),
-                        "description": str(data.get("ket_buku_gudang", "")).strip(),
-                        "amount": str(data.get("ongkir", "0")).strip(),
+                        "no": str(nomor),
+                        "resi": str(
+                            data.get("no_resi", "")
+                        ).strip().upper(),
+
+                        "destination": str(
+                            data.get("tujuan", "")
+                        ).strip().upper(),
+
+                        "description": str(
+                            data.get("nama_barang", "")
+                        ).strip().upper(),
+
+                        "package": str(
+                            data.get("koli", "0")
+                        ).strip(),
+
+                        "weight": str(
+                            data.get("berat", "0")
+                        ).strip(),
+
+                        "volume": str(
+                            data.get("kubik", "0")
+                        ).strip(),
+
+                        "amount": str(
+                            data.get("ongkir", "0")
+                        ).strip(),
                     }
                     for column_index, column in enumerate(self.active_columns):
-                        # PENGGUNAAN HELPER
                         item = self._buat_item_tabel(values.get(column["key"], ""), column)
                         self.tabel_item_invoice.setItem(row, column_index, item)
 
@@ -1121,17 +1453,38 @@ class TabInvoice(ZoomTableMixin, QWidget):
 
     def _generate_no_invoice(self):
         try:
-            from config import CURRENT_SESSION, muat_pengaturan_sistem
-            pengaturan = muat_pengaturan_sistem()
-            prefix_inv = pengaturan.get("prefix_invoice", "INV")
-            branch_code = CURRENT_SESSION.get("kode_cabang", "PUSAT").strip().upper()
-        except ImportError:
+            pengaturan = self._muat_data_perusahaan()
+            prefix_inv = (
+                str(pengaturan.get("prefix_invoice", "INV"))
+                .strip()
+                .upper()
+                or "INV"
+            )
+            branch_code = (
+                str(CURRENT_SESSION.get("kode_cabang", "PUSAT"))
+                .strip()
+                .upper()
+                or "PUSAT"
+            )
+        except Exception as exc:
+            print(f"Gagal membaca konfigurasi nomor invoice: {exc}")
             prefix_inv = "INV"
             branch_code = "PUSAT"
 
-        prefix = f"{prefix_inv}-{branch_code}-{datetime.now().strftime('%Y%m%d')}"
+        prefix = (
+            f"{prefix_inv}-{branch_code}-"
+            f"{datetime.now().strftime('%Y%m%d')}"
+        )
         sequence = db_service.dapatkan_sequence_invoice_baru(prefix)
-        return f"{prefix}-{sequence:04d}"
+
+        try:
+            sequence_number = int(sequence)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "Sequence invoice dari database tidak valid."
+            ) from exc
+
+        return f"{prefix}-{sequence_number:04d}"
 
     def _metadata_dict(self):
         metadata = {
@@ -1204,17 +1557,32 @@ class TabInvoice(ZoomTableMixin, QWidget):
             sukses, pesan = db_service.simpan_atau_update_invoice(header_data, items, is_update)
 
             if not sukses:
-                if "sudah digunakan" in pesan.lower():
-                    QMessageBox.warning(self, "Nomor Invoice Sudah Ada",
-                                        "Nomor invoice tersebut sudah tersimpan. Buka dari histori untuk mengeditnya.")
+                pesan_teks = str(
+                    pesan or "Invoice gagal disimpan."
+                )
+
+                if "sudah digunakan" in pesan_teks.lower():
+                    QMessageBox.warning(
+                        self,
+                        "Nomor Invoice Sudah Ada",
+                        (
+                            "Nomor invoice tersebut sudah tersimpan. "
+                            "Buka dari histori untuk mengeditnya."
+                        ),
+                    )
                 else:
-                    QMessageBox.warning(self, "Peringatan", pesan)
+                    QMessageBox.warning(
+                        self,
+                        "Peringatan",
+                        pesan_teks,
+                    )
                 return
 
             self.no_invoice_aktif = no_invoice
-            self.txt_no_invoice.setText(no_invoice)
+            self.txt_no_invoice.setText(str(no_invoice))
             self._dirty = False
             self.btn_simpan_db.setEnabled(False)
+            self.btn_cetak.setEnabled(True)
             self.lbl_title_editor.setText(f"{self.status_invoice_aktif} INVOICE: {no_invoice}")
             self.load_histori_invoice()
             QMessageBox.information(self, "Sukses", f"Invoice {no_invoice} berhasil disimpan.")
@@ -1225,7 +1593,7 @@ class TabInvoice(ZoomTableMixin, QWidget):
     def load_histori_invoice(self):
         self.tabel_histori_invoice.setRowCount(0)
         try:
-            rows = db_service.ambil_histori_invoice(limit=300)
+            rows = db_service.ambil_histori_invoice(limit=300) or []
             for data in rows:
                 row = self.tabel_histori_invoice.rowCount()
                 self.tabel_histori_invoice.insertRow(row)
@@ -1263,16 +1631,24 @@ class TabInvoice(ZoomTableMixin, QWidget):
             self._sedang_memuat_item = True
             try:
                 client, template_name, tax_name, status, date_text, metadata_text = header
-                metadata = json.loads(metadata_text or "{}") if metadata_text else {}
+                metadata = self._parse_json_object(metadata_text)
+
+                template_name = str(template_name or "Standar")
+                tax_name = str(tax_name or "NONPAJAK")
+                status = str(status or "DRAFT")
 
                 self.no_invoice_aktif = no_invoice
                 self.status_invoice_aktif = status or "DRAFT"
-                self.txt_no_invoice.setText(no_invoice)
-                self.txt_client.setText(client or "")
-                self.txt_ship_to.setText(metadata.get("ship_to", ""))
-                self.txt_payment_info.setText(metadata.get("payment_info", ""))
-                self.txt_catatan.setText(metadata.get("notes", ""))
-                self.txt_penanda_tangan.setText(metadata.get("signer", ""))
+                self.txt_no_invoice.setText(str(no_invoice or ""))
+                self.txt_client.setText(str(client or ""))
+                self.txt_ship_to.setText(str(metadata.get("ship_to", "") or ""))
+                self.txt_payment_info.setText(
+                    str(metadata.get("payment_info", "") or "")
+                )
+                self.txt_catatan.setText(str(metadata.get("notes", "") or ""))
+                self.txt_penanda_tangan.setText(
+                    str(metadata.get("signer", "") or "")
+                )
 
                 parsed_date = QDate.fromString(date_text or "", "yyyy-MM-dd")
                 self.date_invoice.setDate(parsed_date if parsed_date.isValid() else QDate.currentDate())
@@ -1289,11 +1665,10 @@ class TabInvoice(ZoomTableMixin, QWidget):
 
                 with blokir_signal_sementara(self.tabel_item_invoice):
                     self.tabel_item_invoice.setRowCount(0)
-                    for detail in details:
-                        try:
-                            data = json.loads(detail[0] or "{}")
-                        except Exception:
-                            data = {}
+                    for detail in (details or []):
+                        data = self._parse_json_object(
+                            detail[0] if detail else None
+                        )
                         row = self.tabel_item_invoice.rowCount()
                         self.tabel_item_invoice.insertRow(row)
                         for column_index, column in enumerate(self.active_columns):
@@ -1309,6 +1684,7 @@ class TabInvoice(ZoomTableMixin, QWidget):
                 self.lbl_title_editor.setText(f"{self.status_invoice_aktif} INVOICE: {no_invoice}")
                 self._dirty = False
                 self.btn_simpan_db.setEnabled(False)
+                self.btn_cetak.setEnabled(True)
             finally:
                 self._sedang_memuat_item = False
                 self._loading_invoice = False
@@ -1366,8 +1742,14 @@ class TabInvoice(ZoomTableMixin, QWidget):
         finally:
             self._loading_invoice = False
 
-        self.ubah_rekening_otomatis()
+        self._set_rekening_otomatis(
+            tandai_perubahan=False,
+        )
         self.hitung_ulang_total_tagihan()
+        self._dirty = False
+        self.btn_simpan_db.setEnabled(True)
+        self.btn_cetak.setEnabled(False)
+        self.lbl_title_editor.setText("DRAFT INVOICE BARU")
 
     def _confirm_clear_table(self):
         answer = QMessageBox.question(
@@ -1384,8 +1766,26 @@ class TabInvoice(ZoomTableMixin, QWidget):
     # PREVIEW DAN PDF
     # ------------------------------------------------------
     @staticmethod
+    def _parse_json_object(value):
+        """Mengubah teks JSON menjadi dictionary tanpa menghentikan UI."""
+        if isinstance(value, dict):
+            return deepcopy(value)
+
+        if value is None or str(value).strip() == "":
+            return {}
+
+        try:
+            parsed = json.loads(str(value))
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return {}
+
+    @staticmethod
     def _esc(value):
-        return html.escape(str(value if value is not None else ""))
+        return html.escape(
+            str(value if value is not None else ""),
+            quote=True,
+        )
 
     def _visible_rows(self):
         rows = []
@@ -1409,27 +1809,51 @@ class TabInvoice(ZoomTableMixin, QWidget):
         layout_type = self.active_template.get("layout", "standard")
         rows = self._visible_rows()
 
-        nama_perusahaan = "PT NAMA PERUSAHAAN"
-        alamat_lengkap = "Alamat Perusahaan<br>Telp: 08xx"
-        logo_html = "LOGO"
-        default_signer = "Admin"
+        data_perusahaan = self._muat_data_perusahaan()
 
-        try:
-            from config import CURRENT_SESSION, DEFAULT_CLIENT_DATA, muat_pengaturan_sistem
-            data_perusahaan = DEFAULT_CLIENT_DATA.copy()
-            data_perusahaan.update(muat_pengaturan_sistem())
+        nama_perusahaan = (
+            str(data_perusahaan.get("nama_perusahaan", "")).strip()
+            or "PT KARGO EKSPEDISI"
+        )
+        alamat = str(
+            data_perusahaan.get("alamat_perusahaan", "")
+        ).strip()
+        telp = str(
+            data_perusahaan.get("telp_perusahaan", "")
+        ).strip()
+        logo_html = (
+            str(data_perusahaan.get("logo_text_html", "")).strip()
+            or self._esc(nama_perusahaan)
+        )
+        default_signer = (
+            str(CURRENT_SESSION.get("username", "")).strip()
+            or "ADMIN"
+        )
 
-            nama_perusahaan = data_perusahaan.get("nama_perusahaan", "")
-            alamat = data_perusahaan.get("alamat", "")
-            telp = data_perusahaan.get("telp", "")
-            logo_html = data_perusahaan.get("logo_text_html", nama_perusahaan)
+        bagian_alamat = []
+        if alamat:
+            bagian_alamat.append(
+                self._esc(alamat).replace("\n", "<br>")
+            )
+        if telp:
+            bagian_alamat.append(
+                f"Telp. {self._esc(telp)}"
+            )
+        alamat_lengkap = "<br>".join(bagian_alamat) or "-"
 
-            alamat_lengkap = f"{alamat}<br>Telp. {telp}"
-            default_signer = CURRENT_SESSION.get("username", "Admin")
-        except Exception:
-            pass
+        kota_tanda_tangan = str(
+            data_perusahaan.get("kota_tanda_tangan", "")
+        ).strip()
+        tempat_tanggal = (
+            f"{self._esc(kota_tanda_tangan)}, {self._esc(date_text)}"
+            if kota_tanda_tangan
+            else self._esc(date_text)
+        )
 
-        signer = self.txt_penanda_tangan.text().strip() or default_signer
+        signer = (
+            self.txt_penanda_tangan.text().strip()
+            or default_signer
+        )
 
         headers_html = "".join(
             f'<th style="width:{int(column.get("width", 100))}px">{self._esc(column.get("title", ""))}</th>'
@@ -1568,7 +1992,7 @@ class TabInvoice(ZoomTableMixin, QWidget):
     </table>
 
     <div class="signature">
-        Surabaya, {self._esc(date_text)}
+        {tempat_tanggal}
         <div class="space"></div>
         <div class="name">{self._esc(signer)}</div>
     </div>
@@ -1617,8 +2041,12 @@ class TabInvoice(ZoomTableMixin, QWidget):
 
             if tipe_kertas == "NCR":
                 html_content = html_content.replace(
+                    "@page { size: A4; margin: 8mm; }",
+                    "@page { size: 9.5in 5.5in; margin: 4mm; }",
+                )
+                html_content = html_content.replace(
                     f'body {{ font-family: "{typography.MASTER_FONT}"; color: #111; font-size: 10pt; margin: 0; }}',
-                    'body { font-family: "Courier New", monospace; color: #000; font-size: 9pt; font-weight: bold; margin: 0; }'
+                    'body { font-family: "Courier New", monospace; color: #000; font-size: 9pt; font-weight: bold; margin: 0; }',
                 )
 
             document = QTextDocument()

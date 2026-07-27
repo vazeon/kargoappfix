@@ -29,7 +29,7 @@ from utils.widget_helpers import (
 class SubTabArmada(QWidget, ZoomTableMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
-        db_service.migrasi_cek_kolom_armada()
+
         self.mode = 'IDLE'
         self.current_foto_path = ""
         self._sedang_menerapkan_zoom = False

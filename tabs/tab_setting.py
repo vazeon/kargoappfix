@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QSettings, QEvent
 from PyQt5.QtGui import QFontDatabase
-from config import CURRENT_SESSION, DATA_CLIENT
+from config import CURRENT_SESSION, DATA_CLIENT, refresh_data_client
 
 import services.database_service as db_service
 
@@ -111,7 +111,6 @@ class TabSettingSistem(QWidget):
         layout.addWidget(lbl_title)
 
         # --- GROUP 1: IDENTITAS PERUSAHAAN ---
-        # --- GROUP 1: IDENTITAS PERUSAHAAN ---[cite: 5]
         self.group_pt = QGroupBox("Identitas Perusahaan (White-Label)")
         form_pt = QFormLayout(self.group_pt)
         self._init_form(form_pt)
@@ -146,12 +145,15 @@ class TabSettingSistem(QWidget):
         form_logo.addRow("", lbl_hint_logo)
         layout.addWidget(self.group_logo_html)
 
-        # --- GROUP 3: NAMA DATABASE ---
-        self.group_db = QGroupBox("Nama Database")
+        # --- GROUP 3: DATABASE AKTIF ---
+        self.group_db = QGroupBox("Database Aktif")
         form_db = QFormLayout(self.group_db)
         self._init_form(form_db)
         self.txt_db_path = QLineEdit()
-        self.txt_db_path.setPlaceholderText("Contoh: database_cargo.db")
+        self.txt_db_path.setReadOnly(True)
+        self.txt_db_path.setToolTip(
+            "Database ditentukan dari app_env.json dan tidak dipindahkan dari menu ini."
+        )
 
         form_db.addRow("Path Database (.db):", self.txt_db_path)
         layout.addWidget(self.group_db)
@@ -171,15 +173,30 @@ class TabSettingSistem(QWidget):
 
         self.txt_template_resi = QLineEdit()
         self.txt_template_resi.setPlaceholderText("Contoh: [PREFIX][COUNTER][SUFFIX]")
+
         self.txt_suffix_pajak = QLineEdit()
         self.txt_suffix_pajak.setMaximumWidth(160)
         self.txt_suffix_pajak.setPlaceholderText("Contoh: -P")
+
+        self.txt_prefix_invoice = QLineEdit()
+        self.txt_prefix_invoice.setMaximumWidth(180)
+        self.txt_prefix_invoice.setPlaceholderText("Contoh: INV")
+
+        self.cmb_format_resi_manual = QComboBox()
+        self.cmb_format_resi_manual.addItem("OTOMATIS", False)
+        self.cmb_format_resi_manual.addItem("MANUAL", True)
+        self.cmb_format_resi_manual.setMaximumWidth(180)
+
         self.txt_provinsi_tujuan = QTextEdit()
-        self.txt_provinsi_tujuan.setPlaceholderText("Pisahkan dengan koma. Contoh: KALIMANTAN TIMUR, BALI")
+        self.txt_provinsi_tujuan.setPlaceholderText(
+            "Pisahkan dengan koma. Contoh: KALIMANTAN TIMUR, BALI"
+        )
         self.txt_provinsi_tujuan.setFixedHeight(70)
 
         form_resi.addRow("Template Nomor Resi:", self.txt_template_resi)
         form_resi.addRow("Akhiran Pajak (Suffix):", self.txt_suffix_pajak)
+        form_resi.addRow("Prefix Invoice:", self.txt_prefix_invoice)
+        form_resi.addRow("Input Nomor Resi:", self.cmb_format_resi_manual)
         form_resi.addRow("List Wilayah Dropdown:", self.txt_provinsi_tujuan)
         layout.addWidget(self.group_resi)
         layout.addStretch()
@@ -400,48 +417,31 @@ class TabSettingSistem(QWidget):
     # HAK AKSES ROLE VALIDATION
     # ─────────────────────────────────────────────────────────────────
     def validasi_hak_akses_setting(self):
-        role_sekarang = CURRENT_SESSION.get('role', 'ADMIN')
+        role = str(CURRENT_SESSION.get("role", "ADMIN")).strip().upper()
+        boleh_edit = role == "SUPER_ADMIN"
 
-        if role_sekarang != "SUPER_ADMIN":
-            self.btn_simpan_all.setEnabled(False)
-            self.btn_simpan_all.setText("🔒 PENGATURAN TERKUNCI (VIEW-ONLY MODE)")
-            self.btn_simpan_all.setStyleSheet("""
-                QPushButton {
-                    background-color: #64748b; 
-                    color: #cbd5e1; 
-                    font-weight: bold;
-                    border: none;
-                }
-            """)
-            self.btn_simpan_all.setToolTip("Hanya SUPER_ADMIN yang dapat memodifikasi konfigurasi sistem.")
+        self.btn_simpan_all.setEnabled(boleh_edit)
+        self.btn_simpan_all.setText(
+            "💾 SIMPAN PENGATURAN"
+            if boleh_edit
+            else "🔒 PENGATURAN TERKUNCI (VIEW-ONLY MODE)"
+        )
+        self.btn_simpan_all.setToolTip(
+            "" if boleh_edit else
+            "Hanya SUPER_ADMIN yang dapat memodifikasi konfigurasi sistem."
+        )
 
-            if hasattr(self, 'btn_add_np') and self.btn_add_np:
-                self.btn_add_np.setEnabled(False)
-                self.btn_add_np.setStyleSheet("color: #94a3b8; font-size: 26px; background: transparent; border: none;")
-            if hasattr(self, 'btn_add_p') and self.btn_add_p:
-                self.btn_add_p.setEnabled(False)
-                self.btn_add_p.setStyleSheet("color: #94a3b8; font-size: 26px; background: transparent; border: none;")
+        self.btn_add_np.setEnabled(boleh_edit)
+        self.btn_add_p.setEnabled(boleh_edit)
 
-            for widget in self.findChildren(
-                    (QLineEdit, QTextEdit, QComboBox, QTableWidget)
-            ):
-                if isinstance(
-                        widget,
-                        (QLineEdit, QTextEdit),
-                ):
-                    widget.setReadOnly(True)
+        for widget in self.findChildren((QLineEdit, QTextEdit)):
+            widget.setReadOnly(not boleh_edit)
 
-                elif isinstance(
-                        widget,
-                        (QComboBox, QTableWidget),
-                ):
-                    widget.setEnabled(False)
+        for widget in self.findChildren((QComboBox, QTableWidget)):
+            widget.setEnabled(boleh_edit)
 
-                widget.setStyleSheet(
-                    widget.styleSheet()
-                    + "\nbackground-color: transparent;"
-                    + " color: #94a3b8;"
-                )
+        # Database selalu ditentukan dari app_env.json.
+        self.txt_db_path.setReadOnly(True)
 
     # ─────────────────────────────────────────────────────────────────
     # AKSI TAMBAHAN KHUSUS (REKENING & FONT)
@@ -482,7 +482,7 @@ class TabSettingSistem(QWidget):
         nama = w_nama.text().strip()
 
         if not bank or not norek or not nama:
-            QMessageBox.warning(self, "Peringalan", "Data Bank, No. Rekening, dan Atas Nama wajib diisi!")
+            QMessageBox.warning(self, "Peringatan", "Data Bank, No. Rekening, dan Atas Nama wajib diisi!")
             return
 
         self._insert_row_with_button(table, bank, norek, nama)
@@ -635,10 +635,7 @@ class TabSettingSistem(QWidget):
         for w in self.findChildren((QLineEdit, QTextEdit, QComboBox)):
             w.setStyleSheet(s['input'])
 
-        if CURRENT_SESSION.get('role', 'ADMIN') != "SUPER_ADMIN":
-            self.txt_db_path.setStyleSheet(s['input_readonly'])
-        else:
-            self.txt_db_path.setStyleSheet(s['input'])
+        self.txt_db_path.setStyleSheet(s['input_readonly'])
 
         self.table_cabang.setStyleSheet(s['input'])
         self.btn_simpan_all.setStyleSheet(s['btn_simpan'])
@@ -667,183 +664,284 @@ class TabSettingSistem(QWidget):
     # ─────────────────────────────────────────────────────────────────
     # LOAD & SIMPAN DATA (🎯 SEKARANG AMAN DI DALAM CLASS)
     # ─────────────────────────────────────────────────────────────────
-    def load_current_settings(self):
-        self.txt_nama_perusahaan.setText(DATA_CLIENT.get('nama_perusahaan', ''))
-        self.txt_alamat_perusahaan.setText(DATA_CLIENT.get('alamat_perusahaan', ''))
-        self.txt_telp_perusahaan.setText(DATA_CLIENT.get('telp_perusahaan', ''))
-        self.txt_template_resi.setText(DATA_CLIENT.get('template_no_resi', '[PREFIX][COUNTER][SUFFIX]'))
-        self.txt_suffix_pajak.setText(DATA_CLIENT.get('kode_akhiran_pajak', '-P'))
-        self.txt_db_path.setText(CURRENT_SESSION.get('db_name', 'database_cargo.db'))
-
-        raw_logo = DATA_CLIENT.get('logo_text_html', 'EXPEDISI LOGISTIK')
-        clean_logo = re.sub(r'<[^>]*>', '', raw_logo).strip()
-        self.txt_logo_aplikasi.setText(clean_logo)
-
-        sub_tabs = DATA_CLIENT.get('provinsi_tujuan', [])
-        if isinstance(sub_tabs, str):
+    @staticmethod
+    def _as_list(value):
+        if isinstance(value, list):
+            return value
+        if not value:
+            return []
+        if isinstance(value, str):
             try:
-                sub_tabs = json.loads(sub_tabs)
-            except:
-                sub_tabs = []
-        self.txt_provinsi_tujuan.setText(", ".join(sub_tabs))
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, list) else [value]
+            except (json.JSONDecodeError, TypeError):
+                return [value]
+        return list(value) if isinstance(value, tuple) else []
 
-        raw_np = DATA_CLIENT.get('rekening_nonpajak', DATA_CLIENT.get('rekening', {}).get('rekening_nonpajak', []))
-        rek_np = json.loads(raw_np) if isinstance(raw_np, str) else raw_np
-
-        raw_p = DATA_CLIENT.get('rekening_pajak', DATA_CLIENT.get('rekening', {}).get('rekening_pajak', []))
-        rek_p = json.loads(raw_p) if isinstance(raw_p, str) else raw_p
-
-        def parse_dan_tambah_ke_tabel(rek_str, table):
-            if not rek_str: return
-            bank, norek, nama = "", "", ""
-            parts = [p.strip() for p in rek_str.split(",")]
-
-            if len(parts) >= 3:
-                bank, norek, nama = parts[0], parts[1], parts[2]
-            elif len(parts) == 2:
-                bank, nama = parts[0], parts[1]
-            else:
-                nama = rek_str
-
-            self._insert_row_with_button(table, bank, norek, nama)
-
-        self.table_np.setRowCount(0)
-        self.table_p.setRowCount(0)
-
-        for rek in rek_np:
-            parse_dan_tambah_ke_tabel(rek, self.table_np)
-
-        for rek in rek_p:
-            parse_dan_tambah_ke_tabel(rek, self.table_p)
-
-        # 💡 DIBERSIHKAN: Menggunakan db_service untuk membaca data cabang
+    def load_current_settings(self):
         try:
-            rows = db_service.ambil_semua_data_cabang(limit=10)
-            for idx, r in enumerate(rows):
-                for col, val in enumerate(r):
-                    self.table_cabang.setItem(idx, col, QTableWidgetItem(str(val)))
-        except Exception as e:
-            print(f"[TabSetting] Gagal memuat data cabang: {e}")
+            settings = refresh_data_client()
+        except Exception as exc:
+            print(f"[TabSetting] Gagal refresh pengaturan: {exc}")
+            settings = DATA_CLIENT
 
-    def simpan_pengaturan(self):
-        if CURRENT_SESSION.get('role', 'ADMIN') != "SUPER_ADMIN":
-            return
+        self.txt_nama_perusahaan.setText(settings.get("nama_perusahaan", ""))
+        self.txt_alamat_perusahaan.setText(settings.get("alamat_perusahaan", ""))
+        self.txt_telp_perusahaan.setText(settings.get("telp_perusahaan", ""))
+        self.txt_template_resi.setText(
+            settings.get("template_no_resi", "[PREFIX][COUNTER][SUFFIX]")
+        )
+        self.txt_suffix_pajak.setText(settings.get("kode_akhiran_pajak", "-P"))
+        self.txt_prefix_invoice.setText(settings.get("prefix_invoice", "INV"))
+        self.txt_db_path.setText(CURRENT_SESSION.get("db_name", "database_cargo.db"))
 
-        nama_perusahaan = self.txt_nama_perusahaan.text().strip().upper()
-        template = self.txt_template_resi.text().strip()
-        suffix = self.txt_suffix_pajak.text().strip().upper()
-        db_path_input = self.txt_db_path.text().strip()
+        manual = str(settings.get("format_resi_manual", "0")).lower() in {
+            "1", "true", "yes", "ya", "manual"
+        }
+        idx_manual = self.cmb_format_resi_manual.findData(manual)
+        self.cmb_format_resi_manual.setCurrentIndex(max(idx_manual, 0))
 
-        # 🌟 AMBIL DATA LOGO SATU WARNA POLOS
-        logo_input = self.txt_logo_aplikasi.text().strip().upper()
+        raw_logo = str(settings.get("logo_text_html", "KARGO EKSPEDISI"))
+        self.txt_logo_aplikasi.setText(re.sub(r"<[^>]*>", "", raw_logo).strip())
 
-        if not db_path_input or not nama_perusahaan or not logo_input:
-            QMessageBox.warning(self, "Peringatan", "Nama Perusahaan, Teks Logo, and Path database wajib diisi!")
-            return
+        provinsi = self._as_list(settings.get("provinsi_tujuan", []))
+        self.txt_provinsi_tujuan.setText(
+            ", ".join(str(item).strip() for item in provinsi if str(item).strip())
+        )
 
-        raw_subs = self.txt_provinsi_tujuan.toPlainText().split(',')
-        sub_tabs = [s.strip().upper() for s in raw_subs if s.strip()]
-        sub_tabs_json = json.dumps(sub_tabs)
+        def load_rekening(table, values):
+            table.setRowCount(0)
+            for value in self._as_list(values):
+                if isinstance(value, dict):
+                    bank = value.get("bank", "")
+                    norek = value.get("no_rekening", value.get("nomor", ""))
+                    nama = value.get("atas_nama", value.get("nama", ""))
+                else:
+                    parts = [p.strip() for p in str(value).split(",", 2)]
+                    bank = parts[0] if len(parts) > 0 else ""
+                    norek = parts[1] if len(parts) > 1 else ""
+                    nama = parts[2] if len(parts) > 2 else ""
+                if bank or norek or nama:
+                    self._insert_row_with_button(table, bank, norek, nama)
 
-        list_np_raw = []
-        for r in range(self.table_np.rowCount()):
-            b = self.table_np.item(r, 0).text() if self.table_np.item(r, 0) else ""
-            n = self.table_np.item(r, 1).text() if self.table_np.item(r, 1) else ""
-            nm = self.table_np.item(r, 2).text() if self.table_np.item(r, 2) else ""
-            if b or n or nm:
-                list_np_raw.append(f"{b}, {n}, {nm}")
+        load_rekening(self.table_np, settings.get("rekening_nonpajak", []))
+        load_rekening(self.table_p, settings.get("rekening_pajak", []))
 
-        list_p_raw = []
-        for r in range(self.table_p.rowCount()):
-            b = self.table_p.item(r, 0).text() if self.table_p.item(r, 0) else ""
-            n = self.table_p.item(r, 1).text() if self.table_p.item(r, 1) else ""
-            nm = self.table_p.item(r, 2).text() if self.table_p.item(r, 2) else ""
-            if b or n or nm:
-                list_p_raw.append(f"{b}, {n}, {nm}")
+        self.table_cabang.clearContents()
+        try:
+            rows = db_service.ambil_semua_data_cabang(limit=100) or []
+            self.table_cabang.setRowCount(max(10, len(rows)))
+            for row_index, row_data in enumerate(rows):
+                if isinstance(row_data, dict):
+                    values = [
+                        row_data.get("kode_cabang", ""),
+                        row_data.get("nama_cabang", ""),
+                        row_data.get("resi_prefix", ""),
+                        row_data.get("start_seq_json", "{}"),
+                        row_data.get("aturan_prefix", "{}"),
+                    ]
+                else:
+                    values = list(row_data)[:5]
 
-        list_np = [x for x in list_np_raw if x]
-        list_p = [x for x in list_p_raw if x]
+                while len(values) < 5:
+                    values.append("")
+                for column, value in enumerate(values):
+                    self.table_cabang.setItem(
+                        row_index, column, QTableWidgetItem(str(value or ""))
+                    )
+        except Exception as exc:
+            self.table_cabang.setRowCount(10)
+            print(f"[TabSetting] Gagal memuat data cabang: {exc}")
 
-        # 💡 SUSUN DATA SETTING
-        settings_to_save = [
-            ('nama_perusahaan', nama_perusahaan),
-            ('alamat_perusahaan', alamat_perusahaan),
-            ('telp_perusahaan', telp_perusahaan),
-            ('logo_text_html', logo_input),
-            ('template_no_resi', template),
-            ('kode_akhiran_pajak', suffix),
-            ('provinsi_tujuan', sub_tabs_json),
-            ('rekening_nonpajak', json.dumps(list_np)),
-            ('rekening_pajak', json.dumps(list_p)),
-        ]
+        self.validasi_hak_akses_setting()
 
-        # 💡 SUSUN DATA CABANG
-        branches_to_save = []
+    def _ambil_rekening_tabel(self, table, label):
+        result = []
+        for row in range(table.rowCount()):
+            bank = table.item(row, 0).text().strip().upper() if table.item(row, 0) else ""
+            norek = table.item(row, 1).text().strip() if table.item(row, 1) else ""
+            nama = table.item(row, 2).text().strip().upper() if table.item(row, 2) else ""
+
+            if not any((bank, norek, nama)):
+                continue
+            if not all((bank, norek, nama)):
+                raise ValueError(
+                    f"{label} baris {row + 1} belum lengkap."
+                )
+            result.append(f"{bank}, {norek}, {nama}")
+        return result
+
+    def _ambil_cabang_tabel(self):
+        branches = []
+        kode_terpakai = set()
+
         for row in range(self.table_cabang.rowCount()):
             item_kode = self.table_cabang.item(row, 0)
-            if not (item_kode and item_kode.text().strip()):
+            if not item_kode or not item_kode.text().strip():
                 continue
 
-            item_nama = self.table_cabang.item(row, 1)
-            item_prefix = self.table_cabang.item(row, 2)
-            item_seq = self.table_cabang.item(row, 3)
-            item_route = self.table_cabang.item(row, 4)
+            kode = item_kode.text().strip().upper()
+            nama = (
+                self.table_cabang.item(row, 1).text().strip().upper()
+                if self.table_cabang.item(row, 1) else ""
+            )
+            prefix = (
+                self.table_cabang.item(row, 2).text().strip().upper()
+                if self.table_cabang.item(row, 2) else ""
+            )
+            seq_text = (
+                self.table_cabang.item(row, 3).text().strip()
+                if self.table_cabang.item(row, 3) else '{"DEFAULT": 1000}'
+            ) or '{"DEFAULT": 1000}'
+            route_text = (
+                self.table_cabang.item(row, 4).text().strip()
+                if self.table_cabang.item(row, 4) else '{"DEFAULT": "INV"}'
+            ) or '{"DEFAULT": "INV"}'
 
-            kode_c = item_kode.text().strip().upper()
-            nama_c = item_nama.text().strip().upper() if item_nama else f"CABANG {kode_c}"
-            pref_c = item_prefix.text().strip().upper() if item_prefix else "INV"
-
-            seq_json_str = (item_seq.text().strip() if item_seq and item_seq.text().strip() else '{"DEFAULT": 0}')
-            route_json_str = (item_route.text().strip() if item_route and item_route.text().strip() else '{"DEFAULT": "INV"}')
+            if not nama or not prefix:
+                raise ValueError(
+                    f"Nama dan prefix cabang baris {row + 1} wajib diisi."
+                )
+            if kode in kode_terpakai:
+                raise ValueError(f"Kode cabang '{kode}' digunakan dua kali.")
 
             try:
-                json.loads(seq_json_str)
-                json.loads(route_json_str)
-            except json.JSONDecodeError:
-                QMessageBox.critical(self, "Error Format JSON",
-                                     f"Baris ke-{row + 1} ({kode_c}) gagal disimpan!\nFormat JSON tidak valid.")
-                return
+                seq_data = json.loads(seq_text)
+                route_data = json.loads(route_text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Format JSON cabang baris {row + 1} tidak valid."
+                ) from exc
 
-            branches_to_save.append({
-                'kode_cabang': kode_c,
-                'nama_cabang': nama_c,
-                'resi_prefix': pref_c,
-                'start_seq_json': seq_json_str,
-                'aturan_prefix': route_json_str
+            if not isinstance(seq_data, dict) or not isinstance(route_data, dict):
+                raise ValueError(
+                    f"Kolom JSON cabang {kode} harus berupa object JSON."
+                )
+
+            branches.append({
+                "kode_cabang": kode,
+                "nama_cabang": nama,
+                "resi_prefix": prefix,
+                "start_seq_json": json.dumps(seq_data, ensure_ascii=False),
+                "aturan_prefix": json.dumps(route_data, ensure_ascii=False),
             })
+            kode_terpakai.add(kode)
 
-        # 💡 EKSEKUSI SIMPAN VIA SERVICE
+        if not branches:
+            raise ValueError("Minimal harus tersedia satu kantor cabang.")
+
+        return branches
+
+    def simpan_pengaturan(self):
+        if str(CURRENT_SESSION.get("role", "ADMIN")).upper() != "SUPER_ADMIN":
+            QMessageBox.warning(
+                self, "Akses Ditolak",
+                "Hanya SUPER_ADMIN yang dapat menyimpan pengaturan."
+            )
+            return
+
+        nama = self.txt_nama_perusahaan.text().strip().upper()
+        alamat = self.txt_alamat_perusahaan.text().strip().upper()
+        telp = self.txt_telp_perusahaan.text().strip()
+        logo = self.txt_logo_aplikasi.text().strip().upper()
+        template = self.txt_template_resi.text().strip().upper()
+        suffix = self.txt_suffix_pajak.text().strip().upper()
+        prefix_invoice = self.txt_prefix_invoice.text().strip().upper()
+
+        wajib = {
+            "Nama perusahaan": nama,
+            "Alamat": alamat,
+            "Telepon": telp,
+            "Teks logo": logo,
+            "Template resi": template,
+            "Prefix invoice": prefix_invoice,
+        }
+        kosong = [label for label, value in wajib.items() if not value]
+        if kosong:
+            QMessageBox.warning(
+                self, "Data Belum Lengkap",
+                "Kolom berikut wajib diisi:\n- " + "\n- ".join(kosong)
+            )
+            return
+
+        provinsi = [
+            value.strip().upper()
+            for value in re.split(
+                r"[,;\n]+", self.txt_provinsi_tujuan.toPlainText()
+            )
+            if value.strip()
+        ]
+        provinsi = list(dict.fromkeys(provinsi))
+        if not provinsi:
+            QMessageBox.warning(
+                self, "Wilayah Belum Diisi",
+                "Minimal masukkan satu wilayah tujuan."
+            )
+            return
+
         try:
-            sukses, pesan = db_service.simpan_semua_pengaturan_dan_cabang(settings_to_save, branches_to_save)
+            rekening_np = self._ambil_rekening_tabel(
+                self.table_np, "Rekening non-pajak"
+            )
+            rekening_p = self._ambil_rekening_tabel(
+                self.table_p, "Rekening pajak"
+            )
+            branches = self._ambil_cabang_tabel()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Data Tidak Valid", str(exc))
+            return
+
+        settings_to_save = [
+            ("nama_perusahaan", nama),
+            ("alamat_perusahaan", alamat),
+            ("telp_perusahaan", telp),
+            ("logo_text_html", logo),
+            ("template_no_resi", template),
+            ("kode_akhiran_pajak", suffix),
+            ("prefix_invoice", prefix_invoice),
+            (
+                "format_resi_manual",
+                "1" if self.cmb_format_resi_manual.currentData() else "0"
+            ),
+            ("provinsi_tujuan", json.dumps(provinsi, ensure_ascii=False)),
+            ("rekening_nonpajak", json.dumps(rekening_np, ensure_ascii=False)),
+            ("rekening_pajak", json.dumps(rekening_p, ensure_ascii=False)),
+        ]
+
+        try:
+            sukses, pesan = db_service.simpan_semua_pengaturan_dan_cabang(
+                settings_to_save, branches
+            )
             if not sukses:
-                QMessageBox.critical(self, "Error", f"Gagal menyimpan data:\n{pesan}")
+                QMessageBox.critical(
+                    self, "Gagal Menyimpan",
+                    str(pesan or "Service database menolak penyimpanan.")
+                )
                 return
 
-            db_lama = CURRENT_SESSION['db_name']
+            refresh_data_client()
 
-            if db_lama != db_path_input:
-                import shutil
-                if os.path.exists(db_lama):
-                    try:
-                        shutil.copy2(db_lama, db_path_input)
-                    except Exception as e:
-                        print(f"Gagal menyalin database fisik: {e}")
+            kode_aktif = str(
+                CURRENT_SESSION.get("kode_cabang", "")
+            ).strip().upper()
+            for branch in branches:
+                if branch["kode_cabang"] == kode_aktif:
+                    CURRENT_SESSION.update({
+                        "nama_cabang": branch["nama_cabang"],
+                        "resi_prefix": branch["resi_prefix"],
+                        "aturan_prefix": json.loads(branch["aturan_prefix"]),
+                    })
+                    break
 
-                try:
-                    with open("app_env.json", "w") as f:
-                        json.dump({"active_db": db_path_input}, f)
-                except Exception as e:
-                    print(f"Gagal menulis env: {e}")
-
-            CURRENT_SESSION['db_name'] = db_path_input
-
+            self.load_current_settings()
             QMessageBox.information(
-                self, "Sukses",
-                "⚙️ PENGATURAN BERHASIL DISIMPAN!\n\n"
-                "Silakan restart aplikasi."
+                self, "Pengaturan Tersimpan",
+                "Pengaturan berhasil disimpan dan langsung diterapkan.\n\n"
+                "Path database dan akun developer tetap aman di app_env.json."
             )
-            if self.parent() and hasattr(self.parent(), 'close'):
-                self.parent().close()
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Gagal menyimpan data ke database:\n{e}")
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Error",
+                f"Gagal menyimpan data ke database:\n{exc}"
+            )

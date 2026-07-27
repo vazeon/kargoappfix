@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from config import CURRENT_SESSION, DATA_CLIENT
@@ -11,6 +12,7 @@ from utils.number_formatters import (
     format_decimal_indonesia,
     format_ke_rupiah,
     jumlahkan_angka_dari_teks,
+    rupiah_to_int,
 )
 from utils.typography import get_master_font
 
@@ -62,6 +64,27 @@ def _format_desimal(
         kosong_jika_nol=kosong_jika_nol,
         nilai_kosong="",
     )
+
+
+def _hitung_tarif_satuan_cetak(
+    nilai: Any,
+    tipe_pajak: str,
+) -> int:
+    """Mengembalikan tarif satuan untuk preview, termasuk PPN 1,1% bila pajak."""
+    tarif_dasar = max(0, rupiah_to_int(str(nilai or "")))
+
+    if tarif_dasar <= 0:
+        return 0
+
+    if str(tipe_pajak or "").strip().upper().startswith("PAJAK"):
+        return int(
+            (Decimal(tarif_dasar) * Decimal("1.011")).quantize(
+                Decimal("1"),
+                rounding=ROUND_HALF_UP,
+            )
+        )
+
+    return tarif_dasar
 
 
 def _ambil_rekening(
@@ -143,11 +166,11 @@ def cetak_resi_ke_printer(
         or ""
     )
     comp_address = (
-        DATA_CLIENT.get("alamat")
+        DATA_CLIENT.get("alamat_perusahaan")
         or ""
     )
     comp_phone = (
-        DATA_CLIENT.get("telp")
+        DATA_CLIENT.get("telp_perusahaan")
         or ""
     )
     logo_text_html = (
@@ -237,30 +260,54 @@ def cetak_resi_ke_printer(
         data.get("total_cbm", "")
     ) or "-"
 
+    # Mendukung seluruh nama key tarif yang pernah dipakai TabResi.
+    # Urutkan nilai mentah lebih dulu agar format Rupiah tidak salah dibaca.
     tarif_kg = (
         data.get("tarif_kg_raw", "")
+        or data.get("ongkir_kg_raw", "")
+        or data.get("ongkir_per_kg", "")
         or data.get("tarif_kg", "")
+        or data.get("ongkir_kg", "")
     )
     tarif_m3 = (
         data.get("tarif_m3_raw", "")
+        or data.get("ongkir_m3_raw", "")
+        or data.get("ongkir_per_cbm", "")
         or data.get("tarif_m3", "")
+        or data.get("ongkir_m3", "")
     )
 
     teks_tarif_satuan = ""
-    tarif_kg_cetak = _format_rupiah(tarif_kg)
-    tarif_m3_cetak = _format_rupiah(tarif_m3)
+    kena_ppn = tipe_pajak.startswith("PAJAK")
+
+    tarif_kg_final = _hitung_tarif_satuan_cetak(
+        tarif_kg,
+        tipe_pajak,
+    )
+    tarif_m3_final = _hitung_tarif_satuan_cetak(
+        tarif_m3,
+        tipe_pajak,
+    )
+
+    tarif_kg_cetak = _format_rupiah(tarif_kg_final)
+    tarif_m3_cetak = _format_rupiah(tarif_m3_final)
+    label_tarif = (
+        "Tarif + PPN 1,1%"
+        if kena_ppn
+        else "Tarif"
+    )
 
     if tarif_kg_cetak:
         teks_tarif_satuan = (
             '<div class="tarif-satuan">'
-            f"Tarif: Rp {tarif_kg_cetak} / Kg"
+            f"{label_tarif}: Rp{tarif_kg_cetak} per kg"
             "</div>"
         )
 
     elif tarif_m3_cetak:
         teks_tarif_satuan = (
             '<div class="tarif-satuan">'
-            f"Tarif: Rp {tarif_m3_cetak} / M3"
+            f"{label_tarif}: Rp{tarif_m3_cetak} persuper    123 m³"
             "</div>"
         )
 

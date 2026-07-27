@@ -22,6 +22,18 @@ from .common import (
 )
 
 
+_KUNCI_ITEM = (
+    "no_resi",
+    "pengirim",
+    "penerima",
+    "kota_tujuan",
+    "nama_barang",
+    "koli",
+    "berat",
+    "cbm",
+)
+
+
 def _esc(value: Any) -> str:
     return html.escape(
         str(value if value is not None else "")
@@ -33,9 +45,22 @@ def _nilai_row(
     index: int,
     default: Any = "",
 ) -> Any:
+    if isinstance(row, dict):
+        try:
+            return row.get(
+                _KUNCI_ITEM[index],
+                default,
+            )
+        except IndexError:
+            return default
+
     try:
         return row[index]
-    except (IndexError, TypeError):
+    except (
+        IndexError,
+        KeyError,
+        TypeError,
+    ):
         return default
 
 
@@ -43,7 +68,6 @@ def _teks_koli(nilai: Any) -> str:
     """Menampilkan nilai KOLI sebagai teks bebas."""
     if nilai is None:
         return ""
-
     return str(nilai).strip().upper()
 
 
@@ -65,9 +89,19 @@ def cetak_manifest_ke_printer(
     tipe_kertas: str = "A4",
 ) -> None:
     """Membuat preview dan mencetak dokumen Manifest."""
+    if not isinstance(data, dict):
+        raise TypeError(
+            "Data manifest harus berupa dictionary."
+        )
+
     tipe_kertas = str(
         tipe_kertas or "A4"
     ).strip().upper()
+    tipe_kertas = (
+        "NCR"
+        if tipe_kertas == "NCR"
+        else "A4"
+    )
 
     printer = buat_printer(
         JENIS_MANIFEST,
@@ -77,7 +111,15 @@ def cetak_manifest_ke_printer(
     comp_name = str(
         DATA_CLIENT.get("nama_perusahaan")
         or "EKSPEDISI"
-    )
+    ).strip()
+    comp_address = str(
+        DATA_CLIENT.get("alamat_perusahaan")
+        or ""
+    ).strip()
+    comp_phone = str(
+        DATA_CLIENT.get("telp_perusahaan")
+        or ""
+    ).strip()
 
     list_items = data.get("items", [])
     if not isinstance(list_items, (list, tuple)):
@@ -89,7 +131,6 @@ def cetak_manifest_ke_printer(
 
     for index, row in enumerate(list_items):
         nomor = index + 1
-
         no_resi = _nilai_row(row, 0)
         pengirim = _nilai_row(row, 1)
         penerima = _nilai_row(row, 2)
@@ -97,7 +138,6 @@ def cetak_manifest_ke_printer(
             _nilai_row(row, 3, "")
         )
         nama_barang = _nilai_row(row, 4)
-
         nilai_koli = _nilai_row(row, 5, "")
         nilai_berat = _nilai_row(row, 6, 0)
         nilai_cbm = _nilai_row(row, 7, 0)
@@ -109,20 +149,10 @@ def cetak_manifest_ke_printer(
             nilai_cbm
         )
 
-        koli = _teks_koli(nilai_koli)
-        berat = _format_desimal(
-            nilai_berat,
-            maksimum_desimal=2,
-        )
-        cbm = _format_desimal(
-            nilai_cbm,
-            maksimum_desimal=2,
-        )
-
         kota_cetak = (
             kota_raw.split(" - ")[-1].strip()
             if " - " in kota_raw
-            else kota_raw
+            else kota_raw.strip()
         )
 
         baris_tabel.append(
@@ -133,23 +163,29 @@ def cetak_manifest_ke_printer(
             f"<td>{_esc(penerima)}</td>"
             f"<td>{_esc(kota_cetak)}</td>"
             f"<td>{_esc(nama_barang)}</td>"
-            f'<td align="center">{_esc(koli)}</td>'
-            f'<td align="center">{berat}</td>'
-            f'<td align="center">{cbm}</td>'
+            f'<td align="center">{_esc(_teks_koli(nilai_koli))}</td>'
+            f'<td align="center">{_format_desimal(nilai_berat)}</td>'
+            f'<td align="center">{_format_desimal(nilai_cbm)}</td>'
             "</tr>"
+        )
+
+    if not baris_tabel:
+        baris_tabel.append(
+            '<tr><td colspan="9" align="center" '
+            'style="padding:18px;color:#64748b;">'
+            "Tidak ada muatan pada manifest."
+            "</td></tr>"
         )
 
     total_koli = jumlahkan_angka_dari_teks(
         _nilai_row(row, 5, "")
         for row in list_items
     )
-
     total_koli_cetak = (
         format_decimal_indonesia(total_koli)
         if total_koli != 0
         else "-"
     )
-
     total_berat_cetak = _format_desimal(
         total_berat,
         maksimum_desimal=2,
@@ -159,7 +195,32 @@ def cetak_manifest_ke_printer(
         maksimum_desimal=2,
     )
 
+    nomor_manifest = str(
+        data.get("no_manifest", "")
+        or "MANIFEST"
+    ).strip().upper()
+    armada = str(
+        data.get("armada", "")
+        or "-"
+    ).strip().upper()
+    tanggal = str(
+        data.get("tanggal", "")
+        or ""
+    ).strip()
+
     font_dokumen = get_master_font()
+    detail_perusahaan = "<br>".join(
+        bagian
+        for bagian in (
+            _esc(comp_address),
+            (
+                f"Telp. {_esc(comp_phone)}"
+                if comp_phone
+                else ""
+            ),
+        )
+        if bagian
+    )
 
     html_content = f"""
     <html>
@@ -177,19 +238,26 @@ def cetak_manifest_ke_printer(
                 font-size: 16pt;
                 font-weight: bold;
                 text-align: center;
-                margin-bottom: 5px;
+                margin-bottom: 3px;
                 color: #0f172a;
+            }}
+            .company-detail {{
+                text-align: center;
+                font-size: 8.5pt;
+                margin-bottom: 5px;
+                color: #334155;
             }}
             .sub-title {{
                 text-align: center;
                 font-size: 10pt;
-                margin-bottom: 20px;
+                font-weight: bold;
+                margin-bottom: 14px;
                 color: #475569;
             }}
             .info-manifest {{
                 width: 100%;
-                margin-bottom: 15px;
-                font-size: 10pt;
+                margin-bottom: 10px;
+                font-size: 9.5pt;
                 border-collapse: collapse;
             }}
             .info-manifest td {{
@@ -198,19 +266,21 @@ def cetak_manifest_ke_printer(
             .table-data {{
                 width: 100%;
                 border-collapse: collapse;
-                margin-top: 10px;
+                margin-top: 5px;
+                table-layout: fixed;
             }}
             .table-data th {{
                 border: 1px solid #000000;
-                padding: 6px;
+                padding: 5px 3px;
                 background-color: #f1f5f9;
-                font-size: 9pt;
+                font-size: 8.5pt;
                 font-weight: bold;
             }}
             .table-data td {{
                 border: 1px solid #000000;
-                padding: 6px;
-                font-size: 9.5pt;
+                padding: 5px 3px;
+                font-size: 8.5pt;
+                word-wrap: break-word;
             }}
             .total-row {{
                 font-weight: bold;
@@ -222,6 +292,9 @@ def cetak_manifest_ke_printer(
         <div class="title">
             {_esc(comp_name.upper())}
         </div>
+        <div class="company-detail">
+            {detail_perusahaan}
+        </div>
         <div class="sub-title">
             SURAT JALAN MANIFEST PENGIRIMAN ARMADA
         </div>
@@ -230,23 +303,13 @@ def cetak_manifest_ke_printer(
             <tr>
                 <td width="12%"><b>NO. MANIFEST</b></td>
                 <td width="2%">:</td>
-                <td width="20%">
-                    <b>
-                        {_esc(str(data.get('no_manifest', '')).upper())}
-                    </b>
-                </td>
+                <td width="20%"><b>{_esc(nomor_manifest)}</b></td>
                 <td width="10%"><b>ARMADA</b></td>
                 <td width="2%">:</td>
-                <td width="22%">
-                    <b>
-                        {_esc(str(data.get('armada', '')).upper())}
-                    </b>
-                </td>
+                <td width="22%"><b>{_esc(armada)}</b></td>
                 <td width="10%"><b>TANGGAL</b></td>
                 <td width="2%">:</td>
-                <td width="21%">
-                    {_esc(data.get('tanggal', ''))}
-                </td>
+                <td width="21%">{_esc(tanggal)}</td>
             </tr>
         </table>
 
@@ -271,15 +334,9 @@ def cetak_manifest_ke_printer(
                         style="padding-right: 15px;">
                         TOTAL MUATAN :
                     </td>
-                    <td align="center">
-                        <b>{total_koli_cetak}</b>
-                    </td>
-                    <td align="center">
-                        <b>{total_berat_cetak}</b>
-                    </td>
-                    <td align="center">
-                        <b>{total_cbm_cetak}</b>
-                    </td>
+                    <td align="center"><b>{total_koli_cetak}</b></td>
+                    <td align="center"><b>{total_berat_cetak}</b></td>
+                    <td align="center"><b>{total_cbm_cetak}</b></td>
                 </tr>
             </tbody>
         </table>
@@ -299,9 +356,6 @@ def cetak_manifest_ke_printer(
         parent_window,
         jenis_dokumen=JENIS_MANIFEST,
         tipe_kertas=tipe_kertas,
-        nomor_dokumen=str(
-            data.get("no_manifest", "MANIFEST")
-            or "MANIFEST"
-        ),
+        nomor_dokumen=nomor_manifest,
     )
     preview.exec_()
