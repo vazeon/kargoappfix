@@ -1,5 +1,5 @@
 # themes/modules/kontak_armada.py
-"""Stylesheet untuk tab Kontak, Penerima, Pengirim, dan Armada."""
+"""Stylesheet untuk tab Kontak (Penerima, Pengirim) dan tab Armada (Truk, Kapal)."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def get_kontak_riwayat_styles(is_dark: bool) -> Dict[str, str]:
 
 
 def get_armada_styles(is_dark: bool, mode: str) -> Dict[str, str]:
-    """Menghasilkan style SubTab Armada berdasarkan tema dan mode form."""
+    """Menghasilkan style SubTab Truk dan SubTab Armada berdasarkan tema dan mode form."""
     mode_normalized = str(mode or "IDLE").upper()
     is_primary_mode = mode_normalized in {"IDLE", "PREVIEW"}
     warna_btn_utama = "#3b82f6" if is_primary_mode else "#22c55e"

@@ -1,4 +1,4 @@
-# tabs/tab_kontak_armada/subtab_pengirim.py
+# tabs/tab_kontak/subtab_pengirim.py
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QTableWidget, QHeaderView,
                              QAbstractItemView, QSplitter, QFrame, QSizePolicy)
@@ -304,12 +304,12 @@ class SubTabPengirim(QWidget, ZoomTableMixin):
         super().showEvent(event)
 
         self.load_data_pengirim()
-        # Tema dikelola oleh TabKontakArmada.
+        # Tema dikelola oleh TabKontak.
 
     def sesuaikan_tema_lokal(self):
         win = self.window()
         is_dark = win.current_theme == "dark" if win and hasattr(win, 'current_theme') else False
-        z = zoom_helper.dapatkan_zoom_level("TabKontakArmada")
+        z = zoom_helper.dapatkan_zoom_level("TabKontak")
 
         # 💡 Mengambil styles dari module terpusat
         st = get_kontak_riwayat_styles(is_dark)

@@ -1,4 +1,4 @@
-# tabs/tab_kontak_armada/subtab_armada.py
+# tabs/tab_kontak/subtab_truk.py
 import os
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -26,7 +26,7 @@ from utils.widget_helpers import (
 
 
 
-class SubTabArmada(QWidget, ZoomTableMixin):
+class SubTabTruk(QWidget, ZoomTableMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -50,40 +50,40 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         layout_kiri.setContentsMargins(0, 0, 10, 0)
 
         layout_judul_search = QHBoxLayout()
-        self.label_judul = QLabel("🚚 List Data Armada")
+        self.label_judul = QLabel("🚚 List Data Truk")
         self.label_judul.setFont(QFont(MASTER_FONT, 14, QFont.Bold))
         layout_judul_search.addWidget(self.label_judul)
         layout_judul_search.addStretch()
 
         self.input_cari = QLineEdit()
-        self.input_cari.setPlaceholderText("Cari di Armada...")
+        self.input_cari.setPlaceholderText("Cari truk...")
         self.input_cari.setProperty("zoom_font_key", "sz_input")
         self.input_cari.setFixedWidth(230)
         self.input_cari.textChanged.connect(lambda _t: helper_paksa_kapital_lineedit(self.input_cari))
-        self.input_cari.textChanged.connect(self.filter_tabel_armada)
+        self.input_cari.textChanged.connect(self.filter_tabel_truk)
         layout_judul_search.addWidget(self.input_cari)
         layout_kiri.addLayout(layout_judul_search)
 
-        self.tabel_armada = QTableWidget()
-        self.tabel_armada.setColumnCount(7)
-        self.tabel_armada.setHorizontalHeaderLabels([
+        self.tabel_truk = QTableWidget()
+        self.tabel_truk.setColumnCount(7)
+        self.tabel_truk.setHorizontalHeaderLabels([
             "NO", "JENIS", "NO. POL", "NAMA SOPIR", "NO. HP", "KETERANGAN", "FOTO"
         ])
 
-        self.tabel_armada.setColumnHidden(6, True)
-        self.tabel_armada.setAlternatingRowColors(True)
-        self.tabel_armada.verticalHeader().setVisible(False)
-        self.tabel_armada.horizontalHeader().setFixedHeight(35)
-        self.tabel_armada.verticalHeader().setDefaultSectionSize(32)
-        self.tabel_armada.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.tabel_armada.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.tabel_armada.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.tabel_armada.cellClicked.connect(self.pilih_data_dari_tabel)
-        layout_kiri.addWidget(self.tabel_armada)
+        self.tabel_truk.setColumnHidden(6, True)
+        self.tabel_truk.setAlternatingRowColors(True)
+        self.tabel_truk.verticalHeader().setVisible(False)
+        self.tabel_truk.horizontalHeader().setFixedHeight(35)
+        self.tabel_truk.verticalHeader().setDefaultSectionSize(32)
+        self.tabel_truk.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tabel_truk.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tabel_truk.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tabel_truk.cellClicked.connect(self.pilih_data_dari_tabel)
+        layout_kiri.addWidget(self.tabel_truk)
 
-        self.load_lebar_kolom(self.tabel_armada)
-        self.tabel_armada.horizontalHeader().sectionResized.connect(
-            lambda _logicalIndex, _oldSize, _newSize: self.simpan_lebar_kolom(self.tabel_armada)
+        self.load_lebar_kolom(self.tabel_truk)
+        self.tabel_truk.horizontalHeader().sectionResized.connect(
+            lambda _logicalIndex, _oldSize, _newSize: self.simpan_lebar_kolom(self.tabel_truk)
         )
 
         # ========================================================
@@ -94,7 +94,7 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         layout_kanan = QVBoxLayout(self.panel_kanan)
         layout_kanan.setContentsMargins(15, 15, 15, 15)
 
-        self.lbl_judul_kanan = QLabel("📋 Detail / Editor Armada")
+        self.lbl_judul_kanan = QLabel("📋 Detail / Editor truk")
         self.lbl_judul_kanan.setFont(QFont(MASTER_FONT, 12, QFont.Bold))
         self.lbl_judul_kanan.setAlignment(Qt.AlignCenter)
         layout_kanan.addWidget(self.lbl_judul_kanan)
@@ -148,7 +148,7 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         layout_kanan.addWidget(self.input_keterangan)
 
         layout_kanan.addSpacing(10)
-        self.lbl_foto_title = QLabel("📷 Foto Armada:")
+        self.lbl_foto_title = QLabel("📷 Foto truk:")
         layout_kanan.addWidget(self.lbl_foto_title)
 
         self.lbl_preview_foto = QLabel("Tidak Ada Foto")
@@ -162,7 +162,7 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         self.btn_pilih_foto = QPushButton("📂 Lampirkan Foto Baru")
 
         self.btn_pilih_foto.setProperty("zoom_font_key", None)
-        self.btn_pilih_foto.clicked.connect(self.pilih_foto_armada)
+        self.btn_pilih_foto.clicked.connect(self.pilih_foto_truk)
         layout_kanan.addWidget(self.btn_pilih_foto)
         layout_kanan.addStretch()
 
@@ -197,15 +197,15 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         if mode == 'IDLE':
             self.bersihkan_form()
             self.aktifkan_input(False)
-            self.tabel_armada.clearSelection()
-            self.btn_aksi.setText("➕ Tambah Armada")
+            self.tabel_truk.clearSelection()
+            self.btn_aksi.setText("➕ Tambah truk")
             self.btn_batal.hide()
             self.btn_pilih_foto.hide()
         elif mode == 'TAMBAH':
             self.bersihkan_form()
             self.aktifkan_input(True)
             self.input_nopol.setReadOnly(False)
-            self.btn_aksi.setText("💾 Simpan Armada")
+            self.btn_aksi.setText("💾 Simpan truk")
             self.btn_batal.show()
             self.btn_pilih_foto.show()
         elif mode == 'PREVIEW':
@@ -282,20 +282,20 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         if self.mode == 'IDLE':
             self.atur_mode('TAMBAH')
         elif self.mode == 'TAMBAH':
-            self.simpan_atau_update_armada()
+            self.simpan_atau_update_truk()
         elif self.mode == 'PREVIEW':
             self.atur_mode('EDIT')
         elif self.mode == 'EDIT':
-            self.simpan_atau_update_armada()
+            self.simpan_atau_update_truk()
 
     # ============================================================
-    # FOTO ARMADA
+    # FOTO truk
     # ============================================================
 
-    def pilih_foto_armada(self):
+    def pilih_foto_truk(self):
         options = QFileDialog.Options()
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Pilih Foto Unit Armada", "",
+            self, "Pilih Foto Unit truk", "",
             "Images (*.png *.jpeg *.jpg *.bmp)", options=options
         )
         if file_path:
@@ -317,18 +317,18 @@ class SubTabArmada(QWidget, ZoomTableMixin):
     # ============================================================
 
     def _settings_kolom(self):
-        return QSettings("EkspedisiApp", "SubTabArmada")
+        return QSettings("EkspedisiApp", "SubTabTruk")
 
     def simpan_lebar_kolom(self, tabel):
         if self._sedang_menerapkan_zoom:
             return
         widths = self._lebar_dasar_tabel(tabel)  # 💡 Dari Mixin
         self._perbarui_cache_lebar_zoom(tabel, widths)  # 💡 Dari Mixin
-        self._settings_kolom().setValue("lebar_kolom_armada", widths)
+        self._settings_kolom().setValue("lebar_kolom_truk", widths)
 
     def load_lebar_kolom(self, tabel):
         try:
-            widths = self._settings_kolom().value("lebar_kolom_armada")
+            widths = self._settings_kolom().value("lebar_kolom_truk")
             if widths and len(widths) == tabel.columnCount():
                 for i, w in enumerate(widths):
                     if i < 5:
@@ -345,19 +345,19 @@ class SubTabArmada(QWidget, ZoomTableMixin):
             base_widths = [tabel.columnWidth(i) for i in range(tabel.columnCount())]
             self._perbarui_cache_lebar_zoom(tabel, base_widths)
         except Exception as e:
-            print(f"Error memuat lebar kolom Armada: {e}")
+            print(f"Error memuat lebar kolom truk: {e}")
 
     # ============================================================
-    # DATA & TABEL ARMADA
+    # DATA & TABEL truk
     # ============================================================
 
     def refresh_tabel(self):
-        self.tabel_armada.setRowCount(0)
+        self.tabel_truk.setRowCount(0)
         try:
-            rows = db_service.ambil_semua_armada_full()
+            rows = db_service.ambil_semua_truk_full()
             for i, row in enumerate(rows):
-                baris = self.tabel_armada.rowCount()
-                self.tabel_armada.insertRow(baris)
+                baris = self.tabel_truk.rowCount()
+                self.tabel_truk.insertRow(baris)
 
                 # 💡 Mendeklarasikan variabel agar lebih deskriptif dan mudah dibaca
                 no_urut = str(i + 1)
@@ -369,41 +369,41 @@ class SubTabArmada(QWidget, ZoomTableMixin):
                 foto = row[5]
 
                 # 💡 Menggunakan fungsi buat_tabel_item()
-                self.tabel_armada.setItem(baris, 0, buat_tabel_item(no_urut, editable=False, alignment=Qt.AlignCenter))
-                self.tabel_armada.setItem(baris, 1, buat_tabel_item(jenis, editable=False, alignment=Qt.AlignCenter))
-                self.tabel_armada.setItem(baris, 2, buat_tabel_item(nopol, editable=False,
+                self.tabel_truk.setItem(baris, 0, buat_tabel_item(no_urut, editable=False, alignment=Qt.AlignCenter))
+                self.tabel_truk.setItem(baris, 1, buat_tabel_item(jenis, editable=False, alignment=Qt.AlignCenter))
+                self.tabel_truk.setItem(baris, 2, buat_tabel_item(nopol, editable=False,
                                                                     alignment=Qt.AlignLeft | Qt.AlignVCenter))
-                self.tabel_armada.setItem(baris, 3, buat_tabel_item(sopir, editable=False,
+                self.tabel_truk.setItem(baris, 3, buat_tabel_item(sopir, editable=False,
                                                                     alignment=Qt.AlignLeft | Qt.AlignVCenter))
-                self.tabel_armada.setItem(baris, 4, buat_tabel_item(hp, editable=False, alignment=Qt.AlignCenter))
-                self.tabel_armada.setItem(baris, 5, buat_tabel_item(ket, editable=False,
+                self.tabel_truk.setItem(baris, 4, buat_tabel_item(hp, editable=False, alignment=Qt.AlignCenter))
+                self.tabel_truk.setItem(baris, 5, buat_tabel_item(ket, editable=False,
                                                                     alignment=Qt.AlignLeft | Qt.AlignVCenter))
-                self.tabel_armada.setItem(baris, 6, buat_tabel_item(foto, editable=False))
+                self.tabel_truk.setItem(baris, 6, buat_tabel_item(foto, editable=False))
 
-            self.filter_tabel_armada(self.input_cari.text())
+            self.filter_tabel_truk(self.input_cari.text())
         except Exception as e:
-            print(f"Bypass Error Load Tabel Armada: {e}")
+            print(f"Bypass Error Load Tabel truk: {e}")
 
-    def filter_tabel_armada(self, text):
+    def filter_tabel_truk(self, text):
         kata_kunci = text.lower().strip()
         nomor_baru = 1
 
-        for row in range(self.tabel_armada.rowCount()):
+        for row in range(self.tabel_truk.rowCount()):
             harus_muncul = False
-            for col in range(1, self.tabel_armada.columnCount() - 1):
-                item = self.tabel_armada.item(row, col)
+            for col in range(1, self.tabel_truk.columnCount() - 1):
+                item = self.tabel_truk.item(row, col)
                 if item and kata_kunci in item.text().lower():
                     harus_muncul = True
                     break
 
             if harus_muncul:
-                self.tabel_armada.setRowHidden(row, False)
-                self.tabel_armada.item(row, 0).setText(str(nomor_baru))
+                self.tabel_truk.setRowHidden(row, False)
+                self.tabel_truk.item(row, 0).setText(str(nomor_baru))
                 nomor_baru += 1
             else:
-                self.tabel_armada.setRowHidden(row, True)
+                self.tabel_truk.setRowHidden(row, True)
 
-    def simpan_atau_update_armada(self):
+    def simpan_atau_update_truk(self):
         nopol = self.input_nopol.text().strip().upper()
         sopir = self.input_sopir.text().strip().upper()
         hp = self.input_hp_sopir.text().strip()
@@ -426,15 +426,15 @@ class SubTabArmada(QWidget, ZoomTableMixin):
             return
 
         try:
-            sukses, pesan = db_service.simpan_atau_update_armada_full(
+            sukses, pesan = db_service.simpan_atau_update_truk_full(
                 nopol, jenis, sopir, hp, ket, foto, mode=self.mode
             )
 
             if not sukses:
-                QMessageBox.warning(self, "Data Armada", pesan)
+                QMessageBox.warning(self, "Data truk", pesan)
                 return
 
-            QMessageBox.information(self, "Sukses", f"Data armada {nopol} berhasil disimpan!")
+            QMessageBox.information(self, "Sukses", f"Data truk {nopol} berhasil disimpan!")
             self.atur_mode('IDLE')
             self.refresh_tabel()
         except Exception as e:
@@ -443,17 +443,17 @@ class SubTabArmada(QWidget, ZoomTableMixin):
     def pilih_data_dari_tabel(self, row, column):
         try:
             self.atur_mode('PREVIEW')
-            self.input_nopol.setText(self.tabel_armada.item(row, 2).text())
-            self.input_sopir.setText(self.tabel_armada.item(row, 3).text())
+            self.input_nopol.setText(self.tabel_truk.item(row, 2).text())
+            self.input_sopir.setText(self.tabel_truk.item(row, 3).text())
 
-            hp_val = self.tabel_armada.item(row, 4).text()
+            hp_val = self.tabel_truk.item(row, 4).text()
             self.input_hp_sopir.setText("" if hp_val == "-" else hp_val)
-            self.input_keterangan.setText(self.tabel_armada.item(row, 5).text())
+            self.input_keterangan.setText(self.tabel_truk.item(row, 5).text())
 
-            jenis_text = self.tabel_armada.item(row, 1).text()
+            jenis_text = self.tabel_truk.item(row, 1).text()
             self.set_jenis_truk_form(jenis_text)
 
-            foto_val = self.tabel_armada.item(row, 6).text()
+            foto_val = self.tabel_truk.item(row, 6).text()
             self.current_foto_path = foto_val if foto_val and foto_val != "None" else ""
             self.tampilkan_foto(self.current_foto_path)
 
@@ -465,7 +465,6 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         terapkan_popup_combobox_bawah(self)
 
         self.refresh_tabel()
-        # Tema dikelola oleh TabKontakArmada.
 
     # ============================================================
     # TEMA DAN ZOOM
@@ -488,19 +487,19 @@ class SubTabArmada(QWidget, ZoomTableMixin):
 
         style_input_normal = getattr(
             self,
-            "_style_input_normal_armada",
+            "_style_input_normal_truk",
             "background-color: #ffffff; color: #0f172a; "
             "border: 1px solid #cbd5e1; border-radius: 4px;"
         )
         style_input_locked = getattr(
             self,
-            "_style_input_locked_armada",
+            "_style_input_locked_truk",
             "background-color: #f1f5f9; color: #64748b; "
             "border: 1px dashed #cbd5e1; border-radius: 4px;"
         )
         style_btn_foto = getattr(
             self,
-            "_style_btn_foto_armada",
+            "_style_btn_foto_truk",
             "QPushButton { background-color: #e2e8f0; color: #0f172a; "
             "border: 1px solid #cbd5e1; border-radius: 4px; } "
             "QPushButton:hover { background-color: #cbd5e1; }"
@@ -579,7 +578,7 @@ class SubTabArmada(QWidget, ZoomTableMixin):
     def sesuaikan_tema_lokal(self):
         win = self.window()
         is_dark = win.current_theme == "dark" if win and hasattr(win, 'current_theme') else False
-        z = zoom_helper.dapatkan_zoom_level("TabKontakArmada")
+        z = zoom_helper.dapatkan_zoom_level("TabArmada")
 
         self.label_judul.setProperty("zoom_font_key", "sz_title")
 
@@ -587,9 +586,9 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         st = get_armada_styles(is_dark, self.mode)
 
         # Simpan style aktif untuk callback pengunci statis
-        self._style_input_normal_armada = st["input_normal"]
-        self._style_input_locked_armada = st["input_locked"]
-        self._style_btn_foto_armada = st["btn_foto"]
+        self._style_input_normal_truk = st["input_normal"]
+        self._style_input_locked_truk = st["input_locked"]
+        self._style_btn_foto_truk = st["btn_foto"]
 
         self.panel_kanan.setStyleSheet(st["panel_kanan"])
 
@@ -603,20 +602,20 @@ class SubTabArmada(QWidget, ZoomTableMixin):
         self.panel_kanan.layout().setContentsMargins(15, 15, 15, 15)
 
         # Blokir signal tabel
-        self.tabel_armada.horizontalHeader().blockSignals(True)
+        self.tabel_truk.horizontalHeader().blockSignals(True)
 
         self._sedang_menerapkan_zoom = True
         try:
             zoom_helper.terapkan_zoom_semua_elemen(container_widget=self, z=z, is_dark=is_dark)
         finally:
             self._sedang_menerapkan_zoom = False
-            self.tabel_armada.horizontalHeader().blockSignals(False)
+            self.tabel_truk.horizontalHeader().blockSignals(False)
 
         # Paksa skala kolom tabel
-        zoom_helper._skalakan_kolom_tableview(self.tabel_armada, z)
+        zoom_helper._skalakan_kolom_tableview(self.tabel_truk, z)
 
         # ========================================================
-        # --- KUNCI STATIS TOTAL PANEL KANAN (EDITOR ARMADA) ---
+        # --- KUNCI STATIS TOTAL PANEL KANAN (EDITOR truk) ---
         # ========================================================
         font_statis_base = get_global_font_sizes(0)["sz_base"]
         font_statis_input = get_global_font_sizes(0)["sz_input"]

@@ -99,7 +99,7 @@ class TabBukuGudang(QWidget):
     KOL_MASUK = 2
     KOL_KELUAR = 3
     KOL_STATUS = 4
-    KOL_ARMADA = 5
+    KOL_TRUK = 5
     KOL_PENGIRIM = 6
     KOL_KOTA_ASAL = 7
     KOL_PENERIMA = 8
@@ -392,7 +392,7 @@ class TabBukuGudang(QWidget):
 
         tabel = QTableWidget()
         tabel.setColumnCount(17)
-        headers = ["NO.", "RESI", "MASUK", "KELUAR", "STATUS", "ARMADA", "PENGIRIM",
+        headers = ["NO.", "RESI", "MASUK", "KELUAR", "STATUS", "TRUK", "PENGIRIM",
                    "KOTA ASAL", "PENERIMA", "KOTA TUJUAN", "NAMA BARANG",
                    "KOLI", "BERAT (kg)", "KUBIK (m3)", "ONGKIR (Rp)", "PAYMENT", "KETERANGAN"]
         tabel.setHorizontalHeaderLabels(headers)

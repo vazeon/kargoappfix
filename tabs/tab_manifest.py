@@ -74,8 +74,8 @@ class TabManifest(QWidget):
         self.cb_filter_wilayah.currentTextChanged.connect(self.on_wilayah_changed)
         hbox_top.addWidget(self.cb_filter_wilayah)
 
-        # 1. ComboBox Jenis Truk (Armada) dengan Placeholder
-        hbox_top.addWidget(QLabel("Armada:"))
+        # 1. ComboBox Jenis Truk dengan Placeholder
+        hbox_top.addWidget(QLabel("Truk:"))
         self.cb_jenis_truk = QComboBox()
         self.cb_jenis_truk.addItem("- Pilih jenis -")  # Index 0 sebagai placeholder
         self.cb_jenis_truk.addItems(["TB", "Tronton", "CDD", "Pick-up", "Lainnya..."])
@@ -88,12 +88,10 @@ class TabManifest(QWidget):
             font_utama.setItalic(idx == 0)
             self.cb_jenis_truk.setFont(font_utama)
 
-            # Pastikan item ke-0 ("Armada...") di dalam list dropdown selalu italic
             font_italic = QFont(font_utama)
             font_italic.setItalic(True)
             self.cb_jenis_truk.setItemData(0, font_italic, Qt.FontRole)
 
-            # Pastikan item lainnya (TB, Tronton, dll) di dalam list TETAP NORMAL
             font_normal = QFont(font_utama)
             font_normal.setItalic(False)
             for i in range(1, self.cb_jenis_truk.count()):
@@ -123,7 +121,7 @@ class TabManifest(QWidget):
         self.txt_no_pol.textChanged.connect(lambda: paksa_kapital_lineedit(self.txt_no_pol))
         hbox_top.addWidget(self.txt_no_pol)
 
-        # 3. Input Nama Sopir (Wajib jika armada dipilih)
+        # 3. Input Nama Sopir (Wajib jika truk dipilih)
         self.txt_sopir = QLineEdit()
         self.txt_sopir.setPlaceholderText("Nama Sopir")
         self.txt_sopir.setFixedWidth(130)
@@ -192,12 +190,12 @@ class TabManifest(QWidget):
         self.splitter.addWidget(self.panel_kanan)
         self.splitter.setSizes([800, 200])
 
-        self.btn_proses.clicked.connect(self.update_armada_ke_manifest)
+        self.btn_proses.clicked.connect(self.update_truk_ke_manifest)
         self.refresh_tahun_filter()
         self.load_data_resi_gudang()
         self.generate_no_manifest()
         self.sesuaikan_tema_lokal()
-        self.setup_autocomplete_armada()
+        self.setup_autocomplete_truk()
         terapkan_popup_combobox_bawah(self)
 
     def on_jenis_truk_manifest_changed(self, _index=None):
@@ -235,9 +233,9 @@ class TabManifest(QWidget):
         self.cb_jenis_truk.setCurrentIndex(idx_lainnya)
         self.txt_jenis_truk_lain.setText(jenis_bersih.upper())
 
-    def setup_autocomplete_armada(self):
+    def setup_autocomplete_truk(self):
         try:
-            rows = db_service.ambil_armada_list() or []
+            rows = db_service.ambil_truk_list() or []
             sopirs = sorted({str(row[1]).strip() for row in rows if len(row) > 1 and row[1]})
 
             completer_lama = getattr(self, 'completer_sopir', None)
@@ -255,14 +253,14 @@ class TabManifest(QWidget):
 
             self.txt_no_pol.setCompleter(None)
         except Exception as e:
-            QMessageBox.warning(self, "Warning Database", f"Gagal memuat autocomplete armada: {e}")
+            QMessageBox.warning(self, "Warning Database", f"Gagal memuat autocomplete truk: {e}")
 
     def on_sopir_selected(self, sopir):
-        row = db_service.ambil_detail_armada_by_sopir(sopir)
+        row = db_service.ambil_detail_truk_by_sopir(sopir)
         if row:
             no_polisi = row[0] if len(row) > 0 else ""
             jenis_truk = row[1] if len(row) > 1 else ""
-            ket_armada = row[2] if len(row) > 2 else ""
+            ket_truk = row[2] if len(row) > 2 else ""
 
             if no_polisi:
                 self.txt_no_pol.setText(str(no_polisi))
@@ -270,8 +268,8 @@ class TabManifest(QWidget):
             if jenis_truk:
                 self.set_jenis_truk_manifest(jenis_truk)
 
-            if ket_armada and str(ket_armada).strip() not in ('', '-'):
-                self.txt_keterangan.setText(str(ket_armada))
+            if ket_truk and str(ket_truk).strip() not in ('', '-'):
+                self.txt_keterangan.setText(str(ket_truk))
 
     def generate_no_manifest(self):
         if self.is_edit_mode:
@@ -394,7 +392,7 @@ class TabManifest(QWidget):
 
             parents = {}
             for r in rows:
-                tgl_raw, m_id, armada, count = str(r[0]), str(r[1]), str(r[2]), r[3]
+                tgl_raw, m_id, truk, count = str(r[0]), str(r[1]), str(r[2]), r[3]
                 tgl_indo = format_tanggal_ke_ui(tgl_raw)
                 mm = tgl_indo[3:5]
                 nama_bln = NAMA_BULAN.get(mm, "Unknown")
@@ -415,14 +413,14 @@ class TabManifest(QWidget):
                 child.setFont(0, font_tanggal)
                 child.setForeground(0, QBrush(warna_abu))
 
-                armada_display = f" | {armada}" if armada and armada.strip() != "-" else ""
-                child.setText(1, f"{m_id}{armada_display} ({count} Resi)")
+                truk_display = f" | {truk}" if truk and truk.strip() != "-" else ""
+                child.setText(1, f"{m_id}{truk_display} ({count} Resi)")
 
             self.list_histori.expandAll()
         except Exception as e:
             QMessageBox.critical(self, "Error Histori", f"Gagal memuat histori manifest:\n{e}")
 
-    def update_armada_ke_manifest(self):
+    def update_truk_ke_manifest(self):
         m_id = self.edit_manifest_id if self.is_edit_mode else self.txt_no_manifest.text().strip()
         resi = []
 
@@ -441,56 +439,56 @@ class TabManifest(QWidget):
             QMessageBox.warning(self, "Warning", "Centang minimal 1 resi!")
             return
 
-        armada_idx = self.cb_jenis_truk.currentIndex()
-        armada_text = self.ambil_jenis_truk_manifest()
+        truk_idx = self.cb_jenis_truk.currentIndex()
+        truk_text = self.ambil_jenis_truk_manifest()
         nopol = self.txt_no_pol.text().strip().upper()
         sopir = self.txt_sopir.text().strip().upper()
         keterangan = self.txt_keterangan.text().strip().upper()
 
-        if keterangan and armada_idx == 0 and not nopol and not sopir:
+        if keterangan and truk_idx == 0 and not nopol and not sopir:
             dict_update = {
                 'no_polisi': "",
                 'nama_sopir': "",
                 'jenis_truk': "",
-                'nama_armada': keterangan,
-                'ket_armada': keterangan
+                'nama_truk': keterangan,
+                'ket_truk': keterangan
             }
-        elif armada_idx > 0:
-            if self.cb_jenis_truk.currentText().strip() == "Lainnya..." and not armada_text:
+        elif truk_idx > 0:
+            if self.cb_jenis_truk.currentText().strip() == "Lainnya..." and not truk_text:
                 QMessageBox.warning(self, "Peringatan", "Jenis truk lainnya wajib diisi!")
                 self.txt_jenis_truk_lain.setFocus()
                 return
 
-            # Saat jenis armada dipilih, minimal No. Polisi ATAU Nama Sopir harus tersedia.
+            # Saat jenis truk dipilih, minimal No. Polisi ATAU Nama Sopir harus tersedia.
             # Jika hanya Nama Sopir yang tersedia, Manifest tetap disimpan tetapi
-            # tidak membuat Master Armada karena identitas kendaraan belum diketahui.
+            # tidak membuat Master truk karena identitas kendaraan belum diketahui.
             if not nopol and not sopir:
                 QMessageBox.warning(
                     self,
                     "Peringatan",
-                    "Isi minimal No. Polisi atau Nama Sopir jika jenis armada dipilih!"
+                    "Isi minimal No. Polisi atau Nama Sopir jika jenis truk dipilih!"
                 )
                 self.txt_no_pol.setFocus()
                 return
 
             nopol_val = nopol if nopol else "BELUM DIKETAHUI"
             sopir_val = sopir if sopir else "BELUM ADA SOPIR"
-            armada_full = f"{armada_text} - {nopol_val} - {sopir_val}"
+            truk_full = f"{truk_text} - {nopol_val} - {sopir_val}"
             if keterangan:
-                armada_full += f" ({keterangan})"
+                truk_full += f" ({keterangan})"
 
             dict_update = {
                 'no_polisi': nopol,
                 'nama_sopir': sopir,
-                'jenis_truk': armada_text,
-                'nama_armada': armada_full,
-                'ket_armada': keterangan
+                'jenis_truk': truk_text,
+                'nama_truk': truk_full,
+                'ket_truk': keterangan
             }
         else:
             QMessageBox.warning(
                 self,
                 "Peringatan",
-                "Isi Keterangan untuk titip ekspedisi, atau pilih Jenis Armada lalu isi No. Polisi/Nama Sopir!"
+                "Isi Keterangan untuk titip ekspedisi, atau pilih Jenis truk lalu isi No. Polisi/Nama Sopir!"
             )
             return
 
@@ -505,7 +503,7 @@ class TabManifest(QWidget):
 
         if sukses:
             QMessageBox.information(self, "Sukses", "Manifest berhasil diproses!")
-            self.setup_autocomplete_armada()
+            self.setup_autocomplete_truk()
 
             if self.is_edit_mode:
                 self.batal_edit()
@@ -528,12 +526,12 @@ class TabManifest(QWidget):
             parts = teks_info.split(" | ")
             m_id = parts[0].strip()
             if len(parts) > 1:
-                armada = parts[1].split(" (")[0].strip()
+                truk = parts[1].split(" (")[0].strip()
             else:
-                armada = ""
-            self.siapkan_dan_cetak_dari_id(m_id, armada)
+                truk = ""
+            self.siapkan_dan_cetak_dari_id(m_id, truk)
 
-    def siapkan_dan_cetak_dari_id(self, m_id, armada):
+    def siapkan_dan_cetak_dari_id(self, m_id, truk):
         try:
             data = db_service.ambil_resi_detail_untuk_cetak(
                 CURRENT_SESSION.get('kode_cabang', 'PUSAT'),
@@ -552,7 +550,7 @@ class TabManifest(QWidget):
                 ))
 
             cetak_manifest_ke_printer(
-                {'no_manifest': m_id, 'armada': armada if armada else "-",
+                {'no_manifest': m_id, 'truk': truk if truk else "-",
                  'tanggal': QDate.currentDate().toString("dd/MM/yyyy"),
                  'items': items_cetak}, self)
         except Exception as e:
@@ -657,14 +655,14 @@ class TabManifest(QWidget):
         teks_info = item.text(1)
         parts = teks_info.split(" | ")
         m_id = parts[0].strip()
-        armada = parts[1].split(" (")[0].strip() if len(parts) > 1 else ""
+        truk = parts[1].split(" (")[0].strip() if len(parts) > 1 else ""
 
         if action == act_print:
-            self.siapkan_dan_cetak_dari_id(m_id, armada)
+            self.siapkan_dan_cetak_dari_id(m_id, truk)
         elif action == act_edit:
-            self.aktifkan_mode_edit(m_id, armada)
+            self.aktifkan_mode_edit(m_id, truk)
 
-    def aktifkan_mode_edit(self, m_id, armada_str):
+    def aktifkan_mode_edit(self, m_id, truk_str):
         self.is_edit_mode = True
         self.edit_manifest_id = m_id
 
@@ -674,9 +672,9 @@ class TabManifest(QWidget):
         self.txt_sopir.clear()
         self.txt_keterangan.clear()
 
-        armada_bersih = str(armada_str or '').strip()
-        if armada_bersih and armada_bersih != "-":
-            parts = armada_bersih.split(" - ", 2)
+        truk_bersih = str(truk_str or '').strip()
+        if truk_bersih and truk_bersih != "-":
+            parts = truk_bersih.split(" - ", 2)
 
             if len(parts) >= 3:
                 jenis_text, nopol_text, sopir_ket = parts
@@ -697,7 +695,7 @@ class TabManifest(QWidget):
                 if keterangan_text:
                     self.txt_keterangan.setText(keterangan_text.strip())
             else:
-                self.txt_keterangan.setText(armada_bersih)
+                self.txt_keterangan.setText(truk_bersih)
 
         self.lbl_title.setText(f"✏️ Edit Manifest: {m_id}")
         self.txt_no_manifest.setText(m_id)

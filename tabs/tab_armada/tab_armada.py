@@ -1,14 +1,12 @@
-# tabs/tab_kontak_armada/tab_kontak_armada.py
+# tabs/tab_armada/tab_armada.py
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QTabWidget
-from PyQt5.QtCore import Qt
 
 # Import ketiga sub-tab dari folder yang sama
-from .subtab_pengirim import SubTabPengirim
-from .subtab_penerima import SubTabPenerima
-from .subtab_armada import SubTabArmada
+from tabs.tab_armada.subtab_truk import SubTabTruk
+from tabs.tab_armada.subtab_kapal import SubTabKapal
 
 
-class TabKontakArmada(QWidget):
+class TabArmada(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.init_ui()
@@ -21,14 +19,12 @@ class TabKontakArmada(QWidget):
         self.tabs_internal = QTabWidget(self)
 
         # Inisialisasi masing-masing sub-tab
-        self.subtab_pengirim = SubTabPengirim()
-        self.subtab_penerima = SubTabPenerima()
-        self.subtab_armada = SubTabArmada()
+        self.subtab_truk = SubTabTruk()
+        self.subtab_kapal = SubTabKapal()
 
         # Memasukkan ke dalam tab navigasi
-        self.tabs_internal.addTab(self.subtab_pengirim, "Pengirim")
-        self.tabs_internal.addTab(self.subtab_penerima, "Penerima")
-        self.tabs_internal.addTab(self.subtab_armada, "Armada")
+        self.tabs_internal.addTab(self.subtab_truk, "Truk")
+        self.tabs_internal.addTab(self.subtab_kapal, "Kapal")
 
         self.tabs_internal.currentChanged.connect(
             self._tema_subtab_aktif

@@ -199,8 +199,8 @@ def cetak_manifest_ke_printer(
         data.get("no_manifest", "")
         or "MANIFEST"
     ).strip().upper()
-    armada = str(
-        data.get("armada", "")
+    truk = str(
+        data.get("truk", "")
         or "-"
     ).strip().upper()
     tanggal = str(
@@ -296,7 +296,7 @@ def cetak_manifest_ke_printer(
             {detail_perusahaan}
         </div>
         <div class="sub-title">
-            SURAT JALAN MANIFEST PENGIRIMAN ARMADA
+            MANIFEST PENGIRIMAN
         </div>
 
         <table class="info-manifest">
@@ -304,9 +304,9 @@ def cetak_manifest_ke_printer(
                 <td width="12%"><b>NO. MANIFEST</b></td>
                 <td width="2%">:</td>
                 <td width="20%"><b>{_esc(nomor_manifest)}</b></td>
-                <td width="10%"><b>ARMADA</b></td>
+                <td width="10%"><b>TRUK</b></td>
                 <td width="2%">:</td>
-                <td width="22%"><b>{_esc(armada)}</b></td>
+                <td width="22%"><b>{_esc(truk)}</b></td>
                 <td width="10%"><b>TANGGAL</b></td>
                 <td width="2%">:</td>
                 <td width="21%">{_esc(tanggal)}</td>

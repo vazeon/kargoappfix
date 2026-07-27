@@ -101,7 +101,7 @@ def init_db(db_name: str = DEFAULT_DB_NAME) -> str:
                     pembayaran TEXT,
                     status_resi TEXT,
                     foto_bukti TEXT,
-                    armada TEXT,
+                    truk TEXT,
                     ket_buku_gudang TEXT,
                     no_manifest TEXT,
                     ket_manifest TEXT,
@@ -234,16 +234,31 @@ def init_db(db_name: str = DEFAULT_DB_NAME) -> str:
                 """
             )
 
-            # 11. Armada
+            # 11. Truk
             cursor.execute(
                 """
-                CREATE TABLE IF NOT EXISTS armada (
+                CREATE TABLE IF NOT EXISTS truk (
                     jenis_truk TEXT NOT NULL,
                     no_polisi TEXT PRIMARY KEY,
                     nama_sopir TEXT,
                     hp_sopir TEXT,
-                    ket_armada TEXT,
-                    foto_armada TEXT,
+                    ket_truk TEXT,
+                    foto_truk TEXT,
+                    is_synced INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+
+            # 12. Kapal
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS kapal (
+                    nama_kapal TEXT PRIMARY KEY,
+                    tujuan TEXT,
+                    ket_kapal TEXT,
+                    foto_kapal TEXT,
                     is_synced INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

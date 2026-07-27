@@ -28,7 +28,9 @@ from tabs.tab_resi import TabResi
 from tabs.tab_buku_gudang import TabBukuGudang
 from tabs.tab_manifest import TabManifest
 from tabs.tab_invoice import TabInvoice
-from tabs.tab_kontak_armada import TabKontakArmada
+from tabs.tab_kontak.tab_kontak import TabKontak
+from tabs.tab_armada.tab_armada import TabArmada
+
 from tabs.tab_setting import TabSettingSistem
 
 class GlobalPlaceholderManager(QObject):
@@ -171,8 +173,11 @@ class MainWindow(QMainWindow):
         self.tab_invoice = TabInvoice()
         self.tabs.addTab(self.tab_invoice, "🧾 Invoice")
 
-        self.tab_kontak_armada = TabKontakArmada()
-        self.tabs.addTab(self.tab_kontak_armada, "👥 Kontak dan Armada")
+        self.tab_kontak = TabKontak()
+        self.tabs.addTab(self.tab_kontak, "👥 Kontak")
+
+        self.tab_armada = TabArmada()
+        self.tabs.addTab(self.tab_armada, "🚛🚢 Armada")
 
         from PyQt5.QtWidgets import QScroller, QScrollArea, QTableWidget
 
@@ -275,7 +280,7 @@ class MainWindow(QMainWindow):
         elif "Manifest" in nama_tab:
             fungsi_refresh_armada = getattr(
                 self.tab_manifest,
-                "setup_autocomplete_armada",
+                "setup_autocomplete_truk",
                 None,
             )
 
