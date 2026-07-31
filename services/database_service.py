@@ -43,6 +43,15 @@ def get_db_connection(db_name=None):
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
+
+def _kode_cabang_aktif(kode_cabang=None):
+    """Menghasilkan kode cabang baku untuk seluruh operasi master Truk."""
+    return str(
+        kode_cabang
+        or CURRENT_SESSION.get("kode_cabang", "PUSAT")
+        or "PUSAT"
+    ).strip().upper()
+
 def get_setting(key):
     """
     Mengambil satu pengaturan dari database.
@@ -714,54 +723,74 @@ def tandai_resi_selesai_massal(resi_terpilih, kode_cabang):
 # 🚚 TAB MANIFEST (PROSES PEMBERANGKATAN & TRACKING TRUK)
 # ==============================================================================
 
-def ambil_truk_list():
+def ambil_truk_list(kode_cabang=None):
+    """Daftar nomor polisi dan sopir milik cabang aktif."""
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT no_polisi, nama_sopir FROM truk")
-            rows = cursor.fetchall()
-            return rows
-        finally:
-            if conn:
-                conn.close()
+        return []
+
+    cabang = _kode_cabang_aktif(kode_cabang)
+    conn = None
+    try:
+        conn = get_db_connection()
+        return conn.execute(
+            """
+            SELECT no_polisi, nama_sopir
+            FROM truk
+            WHERE kode_cabang = ?
+            ORDER BY no_polisi ASC
+            """,
+            (cabang,),
+        ).fetchall()
+    finally:
+        if conn:
+            conn.close()
 
 
-def ambil_detail_truk_by_nopol(nopol):
+def ambil_detail_truk_by_nopol(nopol, kode_cabang=None):
+    """Detail truk berdasarkan nomor polisi pada cabang aktif."""
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT nama_sopir, jenis_truk FROM truk WHERE no_polisi = ?", (nopol,))
-            row = cursor.fetchone()
-            return row
-        finally:
-            if conn:
-                conn.close()
+        return None
+
+    cabang = _kode_cabang_aktif(kode_cabang)
+    conn = None
+    try:
+        conn = get_db_connection()
+        return conn.execute(
+            """
+            SELECT nama_sopir, jenis_truk
+            FROM truk
+            WHERE kode_cabang = ? AND no_polisi = ?
+            LIMIT 1
+            """,
+            (cabang, str(nopol or "").strip().upper()),
+        ).fetchone()
+    finally:
+        if conn:
+            conn.close()
 
 
-def ambil_detail_truk_by_sopir(sopir):
+def ambil_detail_truk_by_sopir(sopir, kode_cabang=None):
+    """Detail truk berdasarkan nama sopir pada cabang aktif."""
     if USE_CLOUD:
-        pass
-    else:
-        conn = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT no_polisi, jenis_truk, ket_truk FROM truk WHERE nama_sopir = ? ORDER BY updated_at DESC",
-                           (sopir,))
-            row = cursor.fetchone()
-            return row
-        finally:
-            if conn:
-                conn.close()
+        return None
 
+    cabang = _kode_cabang_aktif(kode_cabang)
+    conn = None
+    try:
+        conn = get_db_connection()
+        return conn.execute(
+            """
+            SELECT no_polisi, jenis_truk, ket_truk
+            FROM truk
+            WHERE kode_cabang = ? AND nama_sopir = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (cabang, str(sopir or "").strip().upper()),
+        ).fetchone()
+    finally:
+        if conn:
+            conn.close()
 
 def ambil_no_manifest_list_by_prefix(prefix, kode_cabang):
     if USE_CLOUD:
@@ -813,7 +842,7 @@ def ambil_resi_untuk_manifest(kode_cabang, wilayah, is_edit_mode, edit_manifest_
                               total_ongkir, ket_manifest
                        FROM data_resi
                        WHERE kode_cabang = ?
-                         AND (no_manifest = ? OR (kota_tujuan LIKE ? AND (truk IS NULL OR truk = '')))
+                         AND (no_manifest = ? OR (kota_tujuan LIKE ? AND (no_manifest IS NULL OR TRIM(no_manifest) = '')))
                        ORDER BY CASE WHEN no_manifest = ? THEN 0 ELSE 1 END, tanggal_masuk ASC""",
                     (kode_cabang, edit_manifest_id, f"%{wilayah}%", edit_manifest_id)
                 )
@@ -825,7 +854,7 @@ def ambil_resi_untuk_manifest(kode_cabang, wilayah, is_edit_mode, edit_manifest_
                        FROM data_resi
                        WHERE kode_cabang = ?
                          AND kota_tujuan LIKE ?
-                         AND (truk IS NULL OR truk = '')
+                         AND (no_manifest IS NULL OR TRIM(no_manifest) = '')
                        ORDER BY tanggal_masuk ASC""",
                     (kode_cabang, f"%{wilayah}%")
                 )
@@ -848,11 +877,16 @@ def ambil_histori_manifest(kode_cabang, tahun_terpilih):
                     SELECT DISTINCT r1.tanggal_keluar, \
                                     r1.no_manifest, \
                                     r1.truk,
+                                    COALESCE(m.nama_kapal, ''),
                                     (SELECT COUNT(*) \
                                      FROM data_resi r2 \
                                      WHERE r2.no_manifest = r1.no_manifest \
-                                       AND r2.kode_cabang = r1.kode_cabang)
+                                       AND r2.kode_cabang = r1.kode_cabang),
+                                    COALESCE(m.note_manifest, '')
                     FROM data_resi r1 \
+                    LEFT JOIN manifest m \
+                      ON m.id_manifest = r1.no_manifest \
+                     AND m.kode_cabang = r1.kode_cabang \
                     WHERE r1.no_manifest IS NOT NULL \
                       AND r1.kode_cabang = ? \
                     """
@@ -905,19 +939,30 @@ def simpan_atau_update_manifest_data(
         nama_truk = str(
             truk_payload.get("nama_truk", "")
         ).strip()
+        nama_kapal = str(
+            truk_payload.get("nama_kapal", "")
+        ).strip().upper()
+        note_manifest = str(
+            truk_payload.get("note_manifest", "")
+        ).strip().upper()
+
+        # Untuk manifest tanpa armada, Note menjadi representasi tampilan pada
+        # data_resi.truk agar tetap kompatibel dengan histori dan laporan lama.
+        if not nama_truk and note_manifest:
+            nama_truk = note_manifest
 
         if not nama_truk:
-            return False, "Detail truk/keterangan manifest tidak boleh kosong."
+            return False, "Detail truk atau Note manifest tidak boleh kosong."
 
         if nopol:
             cursor.execute(
                 """
                 INSERT INTO truk (
-                    no_polisi, jenis_truk, nama_sopir,
+                    kode_cabang, no_polisi, jenis_truk, nama_sopir,
                     ket_truk, is_synced, updated_at
                 )
-                VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
-                ON CONFLICT(no_polisi) DO UPDATE SET
+                VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+                ON CONFLICT(kode_cabang, no_polisi) DO UPDATE SET
                     jenis_truk = CASE
                         WHEN TRIM(excluded.jenis_truk) <> ''
                         THEN excluded.jenis_truk ELSE truk.jenis_truk
@@ -933,7 +978,13 @@ def simpan_atau_update_manifest_data(
                     is_synced = 0,
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (nopol, jenis or "BELUM DIKETAHUI", sopir, ket_truk),
+                (
+                    kode_cabang,
+                    nopol,
+                    jenis or "BELUM DIKETAHUI",
+                    sopir,
+                    ket_truk,
+                ),
             )
 
         if is_edit_mode:
@@ -955,20 +1006,30 @@ def simpan_atau_update_manifest_data(
             """
             INSERT INTO manifest (
                 id_manifest, kode_cabang, tanggal,
-                no_polisi, nama_sopir, status_manifest,
-                is_synced, updated_at
+                no_polisi, nama_sopir, nama_kapal, note_manifest,
+                status_manifest, is_synced, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 'PERJALANAN', 0, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'PERJALANAN', 0, CURRENT_TIMESTAMP)
             ON CONFLICT(id_manifest) DO UPDATE SET
                 kode_cabang = excluded.kode_cabang,
                 tanggal = excluded.tanggal,
                 no_polisi = excluded.no_polisi,
                 nama_sopir = excluded.nama_sopir,
+                nama_kapal = excluded.nama_kapal,
+                note_manifest = excluded.note_manifest,
                 status_manifest = excluded.status_manifest,
                 is_synced = 0,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (manifest_id, kode_cabang, tgl_k, nopol or None, sopir),
+            (
+                manifest_id,
+                kode_cabang,
+                tgl_k,
+                nopol or None,
+                sopir,
+                nama_kapal or None,
+                note_manifest or None,
+            ),
         )
 
         for resi_data in resi_list:
@@ -1009,6 +1070,69 @@ def simpan_atau_update_manifest_data(
         if conn:
             conn.close()
 
+
+def ambil_note_manifest(manifest_id, kode_cabang):
+    """Mengambil Note umum yang tersimpan pada satu Manifest."""
+    if USE_CLOUD:
+        return ""
+
+    manifest_id = str(manifest_id or "").strip().upper()
+    kode_cabang = str(kode_cabang or "").strip().upper()
+    if not manifest_id or not kode_cabang:
+        return ""
+
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(note_manifest, '')
+                FROM manifest
+                WHERE id_manifest = ?
+                  AND kode_cabang = ?
+                LIMIT 1
+                """,
+                (manifest_id, kode_cabang),
+            ).fetchone()
+            return str(row[0] or "").strip() if row else ""
+    except sqlite3.Error as exc:
+        logger.error(
+            "[Manifest] Gagal mengambil Note manifest: %s",
+            exc,
+        )
+        return ""
+
+
+def ambil_nama_kapal_manifest(manifest_id, kode_cabang):
+    """Mengambil hanya nama kapal yang tersimpan pada satu Manifest."""
+    if USE_CLOUD:
+        return ""
+
+    manifest_id = str(manifest_id or "").strip().upper()
+    kode_cabang = str(kode_cabang or "").strip().upper()
+    if not manifest_id or not kode_cabang:
+        return ""
+
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(nama_kapal, '')
+                FROM manifest
+                WHERE id_manifest = ?
+                  AND kode_cabang = ?
+                LIMIT 1
+                """,
+                (manifest_id, kode_cabang),
+            ).fetchone()
+            return str(row[0] or "").strip() if row else ""
+    except sqlite3.Error as exc:
+        logger.error(
+            "[Manifest] Gagal mengambil nama kapal: %s",
+            exc,
+        )
+        return ""
+
+
 def ambil_resi_detail_untuk_cetak(kode_cabang, resi_list):
     if USE_CLOUD:
         return []
@@ -1029,7 +1153,8 @@ def ambil_resi_detail_untuk_cetak(kode_cabang, resi_list):
             return conn.execute(
                 f"""
                 SELECT no_resi, pengirim, penerima, kota_tujuan,
-                       nama_barang, koli, berat, cbm
+                       nama_barang, koli, berat, cbm,
+                       total_ongkir, ket_manifest
                 FROM data_resi
                 WHERE kode_cabang = ?
                   AND no_resi IN ({placeholders})
@@ -1529,8 +1654,10 @@ def simpan_atau_update_truk(
     hp_sopir,
     ket_truk,
     foto_truk="",
+    kode_cabang=None,
 ):
-    """Menambah atau memperbarui truk berdasarkan nomor polisi."""
+    """Menambah atau memperbarui truk pada cabang aktif."""
+    cabang = _kode_cabang_aktif(kode_cabang)
     nopol = str(no_polisi or "").strip().upper()
     sopir = str(nama_sopir or "").strip().upper()
     jenis = str(jenis_truk or "").strip()
@@ -1538,6 +1665,8 @@ def simpan_atau_update_truk(
     ket = str(ket_truk or "").strip().upper()
     foto = str(foto_truk or "").strip()
 
+    if not cabang:
+        return False, "Kode cabang tidak tersedia. Silakan login ulang."
     if not nopol:
         return False, "No. Polisi wajib diisi."
     if not jenis:
@@ -1550,11 +1679,12 @@ def simpan_atau_update_truk(
         conn.execute(
             """
             INSERT INTO truk (
-                no_polisi, jenis_truk, nama_sopir, hp_sopir,
-                ket_truk, foto_truk, is_synced, updated_at
+                kode_cabang, no_polisi, jenis_truk,
+                nama_sopir, hp_sopir, ket_truk,
+                foto_truk, is_synced, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
-            ON CONFLICT(no_polisi) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+            ON CONFLICT(kode_cabang, no_polisi) DO UPDATE SET
                 jenis_truk = CASE
                     WHEN TRIM(excluded.jenis_truk) <> ''
                     THEN excluded.jenis_truk ELSE truk.jenis_truk
@@ -1578,7 +1708,7 @@ def simpan_atau_update_truk(
                 is_synced = 0,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (nopol, jenis, sopir, hp, ket, foto),
+            (cabang, nopol, jenis, sopir, hp, ket, foto),
         )
         conn.commit()
         return True, ""
@@ -1590,8 +1720,10 @@ def simpan_atau_update_truk(
         if conn:
             conn.close()
 
-def ambil_semua_truk(db_name=None):
-    """Menampilkan daftar truk terdaftar."""
+
+def ambil_semua_truk(db_name=None, kode_cabang=None):
+    """Menampilkan daftar truk milik cabang aktif."""
+    cabang = _kode_cabang_aktif(kode_cabang)
     try:
         with get_db_connection(db_name) as conn:
             return conn.execute(
@@ -1599,41 +1731,62 @@ def ambil_semua_truk(db_name=None):
                 SELECT no_polisi, nama_sopir, jenis_truk,
                        hp_sopir, ket_truk
                 FROM truk
+                WHERE kode_cabang = ?
                 ORDER BY no_polisi ASC
-                """
+                """,
+                (cabang,),
             ).fetchall()
     except sqlite3.Error as exc:
-        logger.error("[truk] Gagal mengambil data: %s", exc)
+        logger.error("[Truk] Gagal mengambil data: %s", exc)
         return []
 
 
-def ambil_semua_truk_full():
-    """Menarik semua kolom data truk kargo terdaftar untuk di-render ke UI"""
+def ambil_semua_truk_full(kode_cabang=None):
+    """Mengambil seluruh data truk milik cabang aktif untuk tabel UI."""
+    cabang = _kode_cabang_aktif(kode_cabang)
     conn = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT no_polisi, jenis_truk, nama_sopir, hp_sopir, ket_truk, foto_truk 
-            FROM truk 
+        return conn.execute(
+            """
+            SELECT no_polisi, jenis_truk, nama_sopir,
+                   hp_sopir, ket_truk, foto_truk
+            FROM truk
+            WHERE kode_cabang = ?
             ORDER BY no_polisi ASC
-        """)
-        data = cursor.fetchall()
-        return data
+            """,
+            (cabang,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        logger.error("[Truk] Gagal mengambil data lengkap: %s", exc)
+        return []
     finally:
         if conn:
             conn.close()
 
 
-def simpan_atau_update_truk_full(nopol, jenis, sopir, hp, ket, foto, mode="TAMBAH"):
-    nopol = str(nopol or '').strip().upper()
-    jenis = str(jenis or '').strip()
-    sopir = str(sopir or '').strip().upper()
-    hp = str(hp or '').strip()
-    ket = str(ket or '').strip().upper()
-    foto = str(foto or '').strip()
-    mode = str(mode or 'TAMBAH').strip().upper()
+def simpan_atau_update_truk_full(
+    nopol,
+    jenis,
+    sopir,
+    hp,
+    ket,
+    foto,
+    mode="TAMBAH",
+    kode_cabang=None,
+):
+    """Tambah/edit master Truk hanya pada cabang login aktif."""
+    cabang = _kode_cabang_aktif(kode_cabang)
+    nopol = str(nopol or "").strip().upper()
+    jenis = str(jenis or "").strip()
+    sopir = str(sopir or "").strip().upper()
+    hp = str(hp or "").strip()
+    ket = str(ket or "").strip().upper()
+    foto = str(foto or "").strip()
+    mode = str(mode or "TAMBAH").strip().upper()
 
+    if not cabang:
+        return False, "Kode cabang tidak tersedia. Silakan login ulang."
     if not nopol:
         return False, "No. Polisi wajib diisi."
     if not jenis:
@@ -1644,28 +1797,45 @@ def simpan_atau_update_truk_full(nopol, jenis, sopir, hp, ket, foto, mode="TAMBA
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("BEGIN IMMEDIATE")
-        cursor.execute("SELECT 1 FROM truk WHERE no_polisi = ?", (nopol,))
+        cursor.execute(
+            """
+            SELECT 1
+            FROM truk
+            WHERE kode_cabang = ? AND no_polisi = ?
+            """,
+            (cabang, nopol),
+        )
         ada = cursor.fetchone() is not None
 
-        if mode == 'TAMBAH':
+        if mode == "TAMBAH":
             if ada:
                 conn.rollback()
-                return False, f"No. Polisi {nopol} sudah terdaftar. Gunakan menu Edit untuk memperbarui data."
-
-            cursor.execute('''
-                INSERT INTO truk (
-                    no_polisi, jenis_truk, nama_sopir, hp_sopir,
-                    ket_truk, foto_truk, is_synced, updated_at
+                return False, (
+                    f"No. Polisi {nopol} sudah terdaftar pada "
+                    f"cabang {cabang}. Gunakan menu Edit untuk memperbarui data."
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
-            ''', (nopol, jenis, sopir, hp, ket, foto))
 
-        elif mode == 'EDIT':
+            cursor.execute(
+                """
+                INSERT INTO truk (
+                    kode_cabang, no_polisi, jenis_truk,
+                    nama_sopir, hp_sopir, ket_truk,
+                    foto_truk, is_synced, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+                """,
+                (cabang, nopol, jenis, sopir, hp, ket, foto),
+            )
+
+        elif mode == "EDIT":
             if not ada:
                 conn.rollback()
-                return False, f"Data truk {nopol} tidak ditemukan."
+                return False, (
+                    f"Data truk {nopol} tidak ditemukan pada cabang {cabang}."
+                )
 
-            cursor.execute('''
+            cursor.execute(
+                """
                 UPDATE truk
                 SET jenis_truk = ?,
                     nama_sopir = ?,
@@ -1674,18 +1844,20 @@ def simpan_atau_update_truk_full(nopol, jenis, sopir, hp, ket, foto, mode="TAMBA
                     foto_truk = ?,
                     is_synced = 0,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE no_polisi = ?
-            ''', (jenis, sopir, hp, ket, foto, nopol))
+                WHERE kode_cabang = ? AND no_polisi = ?
+                """,
+                (jenis, sopir, hp, ket, foto, cabang, nopol),
+            )
         else:
             conn.rollback()
             return False, f"Mode penyimpanan truk tidak dikenal: {mode}"
 
         conn.commit()
         return True, ""
-    except Exception as e:
+    except sqlite3.Error as exc:
         if conn:
             conn.rollback()
-        return False, str(e)
+        return False, str(exc)
     finally:
         if conn:
             conn.close()

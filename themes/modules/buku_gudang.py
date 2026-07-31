@@ -42,11 +42,6 @@ BUKU_GUDANG_BUTTON_CANCEL_STYLE = (
     "padding: 6px 15px; border-radius: 4px;"
 )
 
-BUKU_GUDANG_INLINE_EDITOR_STYLE = (
-    "background-color: white; color: black; padding: 2px; "
-    "border: 2px solid #3b82f6; border-radius: 3px;"
-)
-
 
 def get_dialog_pilih_penagih_styles() -> Dict[str, str]:
     """Mengembalikan style dialog pemilihan pihak tertagih."""
@@ -106,18 +101,31 @@ def get_buku_gudang_styles(
             f"color: {title_color}; font: bold {sz_title}px "
             f"'{MASTER_FONT}'; margin-bottom: 2px;"
         ),
+
         "btn_tahun": (
             f"font-size: {sz_input + 4}px; font-weight: bold; "
             f"background-color: {input_bg}; color: {input_text}; "
             f"border: 1px solid {input_border}; padding: 6px 12px; "
             f"border-radius: 6px; font-family: '{MASTER_FONT}';"
         ),
+
         "txt_cari": (
             f"font-size: {sz_input}px; background-color: {input_bg}; "
             f"color: {input_text}; border: 1px solid {input_border}; "
             f"padding: 6px; border-radius: 4px; "
             f"font-family: '{MASTER_FONT}';"
         ),
+
+        "inline_editor": (
+            f"background-color: {input_bg}; "
+            f"color: {input_text}; "
+            "padding: 2px; "
+            f"border: 2px solid {selection_bg}; "
+            "border-radius: 3px; "
+            f"selection-background-color: {selection_bg}; "
+            "selection-color: #ffffff;"
+        ),
+
         "tabel": f"""
             QTableWidget {{
                 background-color: {table_bg};

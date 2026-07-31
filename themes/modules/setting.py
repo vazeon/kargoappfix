@@ -1,7 +1,6 @@
 # themes/modules/setting.py
 from utils.typography import MASTER_FONT
 
-from themes.scrollbar import get_scrollbar_style
 
 def get_setting_styles(is_dark: bool, sz_base: int, sz_input: int, sz_title: int) -> dict:
     if is_dark:
@@ -36,7 +35,6 @@ def get_setting_styles(is_dark: bool, sz_base: int, sz_input: int, sz_title: int
             /* FIX: Tambahkan font-size agar placeholder terzoom */
             QLineEdit[custom_italic="true"][is_empty="true"], QTextEdit[custom_italic="true"][is_empty="true"] {{ font-style: italic; font-size: {sz_input}px; color: {text_muted}; }}
             QLineEdit[custom_italic="true"][is_empty="false"], QTextEdit[custom_italic="true"][is_empty="false"] {{ font-style: normal; }}
-            {get_scrollbar_style(is_dark)}
         """,
         'btn_simpan': f"""
             QPushButton {{ background-color: #2563eb; color: #ffffff; font-size: {sz_input}px; font-family: '{MASTER_FONT}'; font-weight: bold; letter-spacing: 0.8px; border: none; border-radius: 8px; padding: 12px 20px; margin-top: 6px; }}

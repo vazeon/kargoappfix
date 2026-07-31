@@ -838,6 +838,8 @@ class TabInvoice(ZoomTableMixin, QWidget):
 
         # PANEL KIRI
         self.panel_kiri = QWidget()
+        self.panel_kiri.setMinimumWidth(260)
+        self.panel_kiri.setMaximumWidth(520)
         layout_kiri = QVBoxLayout(self.panel_kiri)
         layout_kiri.setContentsMargins(0, 0, 10, 0)
 
@@ -866,6 +868,8 @@ class TabInvoice(ZoomTableMixin, QWidget):
 
         # PANEL KANAN
         self.panel_kanan = QWidget()
+        self.panel_kanan.setMinimumWidth(700)
+        self.panel_kanan.setMaximumWidth(1800)
         layout_kanan = QVBoxLayout(self.panel_kanan)
         layout_kanan.setContentsMargins(10, 0, 0, 0)
 
@@ -999,6 +1003,9 @@ class TabInvoice(ZoomTableMixin, QWidget):
 
         self.splitter.addWidget(self.panel_kiri)
         self.splitter.addWidget(self.panel_kanan)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
         self.splitter.setSizes([340, 1000])
 
         # Signal utama
@@ -1037,10 +1044,6 @@ class TabInvoice(ZoomTableMixin, QWidget):
         self.action_cetak_dotmatrix.triggered.connect(lambda: self.cetak_langsung("NCR"))
         self.btn_share.clicked.connect(self.info_fitur_share)
 
-        # TERAPKAN HELPER PLACEHOLDER
-        terap_semua_placeholder_dinamis(self)
-
-        # MEMUAT LEBAR KOLOM HISTORI
         self.load_lebar_kolom_histori(self.tabel_histori_invoice)
         self.tabel_histori_invoice.horizontalHeader().sectionResized.connect(
             lambda *_: self.simpan_lebar_kolom_histori(self.tabel_histori_invoice)

@@ -20,6 +20,19 @@ def _input_kosong(widget: QWidget) -> bool:
     return True
 
 
+def _ubah_property_jika_berbeda(
+    widget: QWidget,
+    nama: str,
+    nilai,
+) -> bool:
+    """Mengubah dynamic property hanya ketika nilainya benar-benar berbeda."""
+    if widget.property(nama) == nilai:
+        return False
+
+    widget.setProperty(nama, nilai)
+    return True
+
+
 def setup_placeholder_dinamis(
     widget: QWidget,
     is_dark: bool = False,
@@ -27,8 +40,8 @@ def setup_placeholder_dinamis(
     """
     Mengatur dynamic property placeholder pada QLineEdit/QTextEdit.
 
-    Signal hanya dipasang satu kali. Pemanggilan berikutnya tetap dapat
-    memperbarui property tema tanpa menduplikasi koneksi signal.
+    Repolish hanya dilakukan ketika property yang dipakai QSS benar-benar
+    berubah. Signal dipasang satu kali agar tidak terjadi koneksi ganda.
     """
     if not isinstance(widget, _INPUT_PLACEHOLDER):
         return
@@ -36,30 +49,47 @@ def setup_placeholder_dinamis(
     if not widget.placeholderText():
         return
 
-    def update_state() -> None:
-        widget.setProperty(
-            "is_empty",
-            "true" if _input_kosong(widget) else "false",
+    def update_status_kosong() -> None:
+        nilai_kosong = (
+            "true" if _input_kosong(widget) else "false"
         )
-        _refresh_style_widget(widget)
 
-    widget.setProperty("custom_italic", "true")
-    widget.setProperty(
+        if _ubah_property_jika_berbeda(
+            widget,
+            "is_empty",
+            nilai_kosong,
+        ):
+            _refresh_style_widget(widget)
+
+    ada_perubahan = False
+    ada_perubahan |= _ubah_property_jika_berbeda(
+        widget,
+        "custom_italic",
+        "true",
+    )
+    ada_perubahan |= _ubah_property_jika_berbeda(
+        widget,
         "is_dark",
         "true" if bool(is_dark) else "false",
     )
+    ada_perubahan |= _ubah_property_jika_berbeda(
+        widget,
+        "is_empty",
+        "true" if _input_kosong(widget) else "false",
+    )
 
-    if not bool(widget.property("_placeholder_hooked")):
-        widget.setProperty("_placeholder_hooked", True)
+    if not bool(getattr(widget, "_placeholder_hooked", False)):
+        widget._placeholder_hooked = True
 
         if isinstance(widget, QLineEdit):
             widget.textChanged.connect(
-                lambda _teks: update_state()
+                lambda _teks: update_status_kosong()
             )
         else:
-            widget.textChanged.connect(update_state)
+            widget.textChanged.connect(update_status_kosong)
 
-    update_state()
+    if ada_perubahan:
+        _refresh_style_widget(widget)
 
 
 def terap_semua_placeholder_dinamis(

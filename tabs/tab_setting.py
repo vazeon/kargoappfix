@@ -20,6 +20,7 @@ from utils.typography import (
     get_master_font,
     perbarui_font_master,
 )
+from utils.placeholder_helper import terap_semua_placeholder_dinamis
 
 class TabSettingSistem(QWidget):
     def __init__(self, parent=None):
@@ -339,7 +340,7 @@ class TabSettingSistem(QWidget):
         layout.addWidget(lbl_title)
 
         self.group_font = QGroupBox(
-            "Pengaturan Font Global"
+            "Pengaturan Font"
         )
 
         form_font = QFormLayout(self.group_font)
@@ -349,9 +350,9 @@ class TabSettingSistem(QWidget):
         self.combo_font.setFixedHeight(36)
 
         font_kandidat = [
-            "Inter",
             "Roboto",
-            "JetBrains Mono",
+            "Aptos Narrow",
+            "Open Sans",
             "Segoe UI",
             "Arial",
         ]
@@ -366,9 +367,9 @@ class TabSettingSistem(QWidget):
             if nama_font in font_tersedia
         ]
 
-        # Inter menjadi fallback apabila daftar tidak terdeteksi.
+        # Roboto menjadi fallback apabila daftar tidak terdeteksi.
         if not font_valid:
-            font_valid = ["Inter"]
+            font_valid = ["Roboto"]
 
         self.combo_font.addItems(font_valid)
 
@@ -390,8 +391,8 @@ class TabSettingSistem(QWidget):
         )
 
         lbl_info = QLabel(
-            "Pilih keluarga font yang digunakan di seluruh aplikasi.\n"
-            "Tutup dan buka kembali aplikasi agar font diterapkan sepenuhnya."
+            "Pilih font yang akan digunakan.\n"
+            "Restart aplikasi untuk menerapkan."
         )
         lbl_info.setStyleSheet(
             "color: #94a3b8; font-style: italic;"
@@ -601,6 +602,11 @@ class TabSettingSistem(QWidget):
             app = QApplication.instance()
             qss = app.styleSheet().lower() if app else ""
             is_dark = "#25282e" in qss or "#1d2024" in qss
+
+        terap_semua_placeholder_dinamis(
+            self,
+            is_dark=is_dark,
+        )
 
         settings = QSettings("AplikasiEkspedisi", "PengaturanUI")
         z = int(settings.value(f"zoom_{self.__class__.__name__}", 0))

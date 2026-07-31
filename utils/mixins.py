@@ -9,6 +9,22 @@ import utils.zoom as zoom_helper
 class ZoomTableMixin:
     """Mixin reusable untuk menyimpan lebar dasar kolom tabel saat zoom."""
 
+    MIN_COLUMN_WIDTH = 20
+    MAX_COLUMN_WIDTH = 100_000
+
+    @classmethod
+    def _lebar_kolom_aman(cls, value, default=100) -> int:
+        """Mengubah nilai lebar menjadi integer aman sebelum dipakai Qt."""
+        try:
+            value = int(value)
+        except (TypeError, ValueError, OverflowError):
+            value = int(default)
+
+        return max(
+            cls.MIN_COLUMN_WIDTH,
+            min(value, cls.MAX_COLUMN_WIDTH),
+        )
+
     def _zoom_key(self, zoom_key: Optional[str] = None) -> str:
         """Menentukan key zoom tanpa mengikat mixin ke modul tertentu."""
         if zoom_key:
@@ -45,10 +61,16 @@ class ZoomTableMixin:
             model = table.model()
             jumlah_kolom = model.columnCount() if model is not None else 0
 
-        return [
-            max(20, round(table.columnWidth(index) / faktor))
-            for index in range(jumlah_kolom)
-        ]
+        hasil = []
+        for index in range(jumlah_kolom):
+            try:
+                width = round(table.columnWidth(index) / faktor)
+            except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+                width = 100
+
+            hasil.append(self._lebar_kolom_aman(width))
+
+        return hasil
 
     def _perbarui_cache_lebar_zoom(
         self,
@@ -56,7 +78,7 @@ class ZoomTableMixin:
         widths: Sequence[int],
     ) -> None:
         table._zoom_base_column_widths = {
-            index: max(20, int(width))
+            index: self._lebar_kolom_aman(width)
             for index, width in enumerate(widths)
         }
 

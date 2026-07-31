@@ -13,6 +13,7 @@ from config import CURRENT_SESSION
 import services.database_service as db_service
 from themes.components import BTN_SIMPAN_CETAK_STYLE, FADE_NOTIFICATION_STYLE
 from themes.modules.resi import (
+    get_resi_detail_barang_theme,
     get_resi_rekening_styles,
     get_resi_static_styles,
     get_resi_styles,
@@ -43,11 +44,6 @@ logger = logging.getLogger(__name__)
 
 
 def _format_ongkir_aman(nilai_mentah):
-    """Format nilai ongkir mentah (string) ke format rupiah jika berupa angka valid.
-
-    Mengembalikan nilai apa adanya bila bukan angka murni, supaya data lama
-    yang mungkin tidak numerik tetap bisa ditampilkan tanpa membuat aplikasi error.
-    """
     nilai_mentah = str(nilai_mentah or "")
     try:
         nilai = int(nilai_mentah) if nilai_mentah.isdigit() else 0
@@ -136,6 +132,8 @@ class TabResi(ZoomTableMixin, QWidget):
         )
 
         self.scroll_kiri = QScrollArea()
+        self.scroll_kiri.setMinimumWidth(700)
+        self.scroll_kiri.setMaximumWidth(1800)
         self.scroll_kiri.setWidgetResizable(True)
         self.scroll_kiri.setFrameShape(QScrollArea.NoFrame)
         self.scroll_kiri.setStyleSheet(
@@ -539,6 +537,8 @@ class TabResi(ZoomTableMixin, QWidget):
         layout_kiri.addStretch(1)
 
         self.widget_kanan = QWidget()
+        self.widget_kanan.setMinimumWidth(260)
+        self.widget_kanan.setMaximumWidth(520)
         layout_kanan = QVBoxLayout(self.widget_kanan)
         layout_kanan.setContentsMargins(10, 12, 15, 12)
         layout_kanan.setSpacing(10)
@@ -575,6 +575,9 @@ class TabResi(ZoomTableMixin, QWidget):
         self.scroll_kiri.setWidget(self.widget_kiri)
         self.splitter.addWidget(self.scroll_kiri)
         self.splitter.addWidget(self.widget_kanan)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
         self.splitter.setSizes([850, 250])
 
         self.setup_uppercase_hooks()
@@ -613,33 +616,6 @@ class TabResi(ZoomTableMixin, QWidget):
         """
         tombol.setStyleSheet(
             f"{gaya_dasar}\n{marker}\n{gaya_fokus}"
-        )
-
-    def _terapkan_pembatas_header_detail_barang(self, is_dark=False):
-        """Beri garis pembatas antarkolom pada kepala tabel Detail Barang."""
-        tabel = getattr(self, "table_items", None)
-        if tabel is None:
-            return
-
-        marker = "/* PEMBATAS_HEADER_DETAIL_BARANG */"
-
-        # Buang style tambahan versi sebelumnya agar tidak menumpuk saat
-        # tema atau tingkat zoom diterapkan ulang.
-        gaya_dasar = tabel.styleSheet().split(marker, 1)[0].rstrip()
-
-        # Menyerupai header tabel Buku Gudang: garis abu-abu kebiruan yang
-        # cukup tegas di antara setiap judul kolom.
-        warna_pembatas = "#64748b" if is_dark else "#a8b7c8"
-
-        gaya_pembatas = f"""
-        QHeaderView::section {{
-            border-right: 2px solid {warna_pembatas};
-            border-bottom: 1px solid {warna_pembatas};
-        }}
-        """
-
-        tabel.setStyleSheet(
-            f"{gaya_dasar}\n{marker}\n{gaya_pembatas}"
         )
 
     def reset_form_input_manual(self, _link=None):
@@ -829,12 +805,61 @@ class TabResi(ZoomTableMixin, QWidget):
         terapkan_popup_combobox_bawah(self)
         QTimer.singleShot(0, self._posisikan_tombol_clear_container)
 
+    def _terapkan_tema_detail_barang(
+        self,
+        is_dark: bool,
+        sz_base: int,
+    ) -> None:
+        """Terapkan tema tabel tanpa memberi stylesheet pada scrollbar."""
+
+        table = getattr(self, "table_items", None)
+
+        if table is None:
+            return
+
+        theme = get_resi_detail_barang_theme(
+            is_dark=is_dark,
+            sz_base=sz_base,
+        )
+
+        self._detail_barang_input_qss = theme["cell_input"]
+
+        table.setAlternatingRowColors(True)
+        table.setShowGrid(True)
+
+        font_table = table.font()
+        font_table.setPixelSize(sz_base)
+        table.setFont(font_table)
+
+        table.horizontalHeader().setStyleSheet(
+            theme["header"]
+        )
+
+        for row in range(table.rowCount()):
+            for column in (
+                self.KOL_NAMA_BARANG,
+                self.KOL_KOLI,
+                self.KOL_BERAT,
+                self.KOL_CBM,
+            ):
+                editor = table.cellWidget(row, column)
+
+                if editor is not None:
+                    editor.setStyleSheet(
+                        theme["cell_input"]
+                    )
+
     def sesuaikan_tema_lokal(self):
         win = self.window()
-        is_dark = win.current_theme == "dark" if win and hasattr(win, 'current_theme') else self.settings.value("theme",
-                                                                                                                "light") == "dark"
+
+        is_dark = (
+            win.current_theme == "dark"
+            if win and hasattr(win, "current_theme")
+            else self.settings.value("theme", "light") == "dark"
+        )
 
         self.current_theme = "dark" if is_dark else "light"
+
         z = zoom_helper.dapatkan_zoom_level(
             self.__class__.__name__
         )
@@ -843,84 +868,241 @@ class TabResi(ZoomTableMixin, QWidget):
             self,
             is_dark=is_dark,
         )
+
         zoom_berubah = (
-            getattr(self, "_zoom_terakhir_tema", None)
-            != z
+                getattr(self, "_zoom_terakhir_tema", None) != z
         )
         self._zoom_terakhir_tema = z
 
-        fs = get_global_font_sizes(z)
-        sz_title, sz_tag, sz_sm = fs['sz_title'], fs['sz_tag'], fs['sz_sm']
-        sz_base, sz_input, sz_total = fs['sz_base'], fs['sz_input'], fs['sz_total']
+        # ==================================================
+        # STYLE STATIS
+        # Dipakai untuk elemen di luar kotak merah.
+        # ==================================================
+        fs_statis = get_global_font_sizes(0)
 
-        styles = get_resi_styles(
+        styles_statis = get_resi_styles(
             is_dark,
-            sz_title,
-            sz_tag,
-            sz_sm,
-            sz_base,
-            sz_input,
-            sz_total,
+            fs_statis["sz_title"],
+            fs_statis["sz_tag"],
+            fs_statis["sz_sm"],
+            fs_statis["sz_base"],
+            fs_statis["sz_input"],
+            fs_statis["sz_total"],
+            z=0,
+        )
+
+        # ==================================================
+        # STYLE ZOOM
+        # Hanya dipakai untuk area di dalam kotak merah.
+        # ==================================================
+        fs_zoom = get_global_font_sizes(z)
+
+        styles_zoom = get_resi_styles(
+            is_dark,
+            fs_zoom["sz_title"],
+            fs_zoom["sz_tag"],
+            fs_zoom["sz_sm"],
+            fs_zoom["sz_base"],
+            fs_zoom["sz_input"],
+            fs_zoom["sz_total"],
             z=z,
         )
-        for widget_name, qss in styles.items():
-            widget = getattr(self, widget_name, None)
-            if widget is not None:
-                widget.setStyleSheet(qss)
 
-        # Style tema dapat menimpa stylesheet tombol. Tambahkan kembali
-        # indikator fokus setelah tema/zoom selesai diterapkan.
+        def pasang_stylesheet(
+                daftar_nama_widget,
+                sumber_style,
+        ):
+            for nama_widget in daftar_nama_widget:
+                widget = getattr(
+                    self,
+                    nama_widget,
+                    None,
+                )
+                qss = sumber_style.get(nama_widget)
+
+                if widget is not None and qss is not None:
+                    widget.setStyleSheet(qss)
+
+        # ==================================================
+        # BAGIAN STATIS — DI LUAR KOTAK MERAH
+        # ==================================================
+        pasang_stylesheet(
+            (
+                # Top bar sebelah kiri.
+                "lbl_main_title",
+                "lbl_tgl_tag",
+                "lbl_resi_tag",
+                "txt_resi_display",
+                "date_input",
+
+                # Histori sebelah kanan.
+                "txt_search",
+                "lbl_histori_title",
+                "date_histori",
+                "btn_reset_tgl",
+                "list_histori",
+
+                # Tombol bawah.
+                "btn_generate_simpan",
+
+                # Struktur utama.
+                "scroll_kiri",
+                "splitter",
+            ),
+            styles_statis,
+        )
+
+        # ==================================================
+        # BAGIAN ZOOM — HANYA DI DALAM KOTAK MERAH
+        # ==================================================
+        pasang_stylesheet(
+            (
+                "group_pengirim",
+                "group_penerima",
+                "group_tabel_container",
+                "group_finance",
+
+                "btn_tambah_baris",
+                "btn_hapus_baris",
+
+                "box_np",
+                "box_p",
+            ),
+            styles_zoom,
+        )
+
+        # Input yang semuanya berada di dalam kotak merah.
+        input_area_zoom = (
+            self.txt_pengirim,
+            self.txt_hp_pengirim,
+            self.txt_alamat_pengirim,
+            self.txt_kota_pengirim,
+
+            self.txt_penerima,
+            self.txt_hp_penerima,
+            self.txt_alamat_penerima,
+            self.txt_kota_penerima,
+            self.cb_provinsi,
+
+            self.txt_ongkir_kg,
+            self.txt_ongkir_m3,
+            self.cb_pajak,
+            self.cb_payment,
+        )
+
+        for widget in input_area_zoom:
+            if widget is not None:
+                widget.setStyleSheet(
+                    styles_zoom["input_utama"]
+                )
+
+        # Total ongkir juga termasuk area kotak merah.
+        if self.txt_total_ongkir is not None:
+            self.txt_total_ongkir.setStyleSheet(
+                styles_zoom["txt_total_ongkir"]
+            )
+
+        # Tabel Detail Barang memakai ukuran zoom aktif.
+        self._terapkan_tema_detail_barang(
+            is_dark=is_dark,
+            sz_base=fs_zoom["sz_base"],
+        )
+
+        # Tombol utama berada di luar kotak merah.
+        # Style dasarnya sudah statis, lalu tambahkan focus outline.
         self._terapkan_gaya_fokus_tombol_utama()
 
-        input_utama = [
-            self.txt_pengirim, self.txt_hp_pengirim, self.txt_alamat_pengirim, self.txt_kota_pengirim,
-            self.txt_penerima, self.txt_hp_penerima, self.txt_alamat_penerima,
-            self.txt_kota_penerima, self.cb_provinsi, self.txt_ongkir_kg, self.txt_ongkir_m3,
-            self.cb_pajak, self.cb_payment
-        ]
-
-        for w in input_utama:
-            if w is not None:
-                w.setStyleSheet(styles['input_utama'])
-
-        if hasattr(self, 'txt_total_ongkir') and self.txt_total_ongkir:
-            self.txt_total_ongkir.setStyleSheet(styles['txt_total_ongkir'])
-        if hasattr(self, 'txt_search') and self.txt_search:
-            self.txt_search.setStyleSheet(styles['txt_search'])
-
-        self.table_items.setStyleSheet(styles['group_tabel_container'])
-        self._terapkan_pembatas_header_detail_barang(is_dark)
-
+        # ==================================================
+        # UKURAN TABEL — TETAP MENGIKUTI ZOOM
+        # ==================================================
         if zoom_berubah:
-            self.table_items.verticalHeader().setDefaultSectionSize(42 + z)
+            self.table_items.verticalHeader().setDefaultSectionSize(
+                34 + z
+            )
 
             try:
-                saved_state = self.settings.value("ukuran_tabel_resi")
+                saved_state = self.settings.value(
+                    "ukuran_tabel_resi"
+                )
+
                 if saved_state:
-                    self.table_items.horizontalHeader().restoreState(saved_state)
+                    self.table_items.horizontalHeader().restoreState(
+                        saved_state
+                    )
                 else:
-                    self.table_items.setColumnWidth(self.KOL_NO, max(30, self.LEBAR_KOLOM_DASAR[self.KOL_NO] + (z * 2)))
-                    self.table_items.setColumnWidth(self.KOL_NAMA_BARANG, max(150, self.LEBAR_KOLOM_DASAR[self.KOL_NAMA_BARANG] + (z * 10)))
-                    self.table_items.setColumnWidth(self.KOL_KOLI, max(70, self.LEBAR_KOLOM_DASAR[self.KOL_KOLI] + (z * 4)))
-                    self.table_items.setColumnWidth(self.KOL_BERAT, max(70, self.LEBAR_KOLOM_DASAR[self.KOL_BERAT] + (z * 4)))
-                    self.table_items.setColumnWidth(self.KOL_CBM, max(70, self.LEBAR_KOLOM_DASAR[self.KOL_CBM] + (z * 4)))
+                    self.table_items.setColumnWidth(
+                        self.KOL_NO,
+                        max(
+                            30,
+                            self.LEBAR_KOLOM_DASAR[self.KOL_NO]
+                            + (z * 2),
+                        ),
+                    )
+
+                    self.table_items.setColumnWidth(
+                        self.KOL_NAMA_BARANG,
+                        max(
+                            150,
+                            self.LEBAR_KOLOM_DASAR[
+                                self.KOL_NAMA_BARANG
+                            ] + (z * 10),
+                        ),
+                    )
+
+                    self.table_items.setColumnWidth(
+                        self.KOL_KOLI,
+                        max(
+                            70,
+                            self.LEBAR_KOLOM_DASAR[
+                                self.KOL_KOLI
+                            ] + (z * 4),
+                        ),
+                    )
+
+                    self.table_items.setColumnWidth(
+                        self.KOL_BERAT,
+                        max(
+                            70,
+                            self.LEBAR_KOLOM_DASAR[
+                                self.KOL_BERAT
+                            ] + (z * 4),
+                        ),
+                    )
+
+                    self.table_items.setColumnWidth(
+                        self.KOL_CBM,
+                        max(
+                            70,
+                            self.LEBAR_KOLOM_DASAR[
+                                self.KOL_CBM
+                            ] + (z * 4),
+                        ),
+                    )
+
             except Exception:
                 pass
 
             self._perbarui_cache_lebar_zoom(
                 self.table_items,
-                self._lebar_dasar_tabel(self.table_items),
+                self._lebar_dasar_tabel(
+                    self.table_items
+                ),
             )
 
-        if hasattr(self, 'date_input') and self.date_input:
-            self.date_input.setStyleSheet(styles['date_input'])
-        if hasattr(self, 'date_histori') and self.date_histori:
-            self.date_histori.setStyleSheet(styles['date_histori'])
+        # Kartu rekening berada di dalam kotak merah.
+        self.handle_rekening_zoom(
+            z,
+            is_dark,
+        )
 
-        self.handle_rekening_zoom(z, is_dark)
+        self.date_input.update()
+        self.date_histori.update()
 
-        if hasattr(self, 'date_input') and self.date_input: self.date_input.update()
-        if hasattr(self, 'date_histori') and self.date_histori: self.date_histori.update()
+        # Pastikan tombol reset kecil tetap berada di ujung container.
+        QTimer.singleShot(
+            0,
+            self._posisikan_tombol_clear_container,
+        )
 
 
     def _bangun_kartu_rekening(self, daftar_rekening, layout_target, style_card):
@@ -1399,9 +1581,27 @@ class TabResi(ZoomTableMixin, QWidget):
         txt_berat.textChanged.connect(self.kalkulator_finansial_otomatis)
         txt_volume.textChanged.connect(self.kalkulator_finansial_otomatis)
 
-        for w in [txt_nama, txt_koli, txt_berat, txt_volume]:
-            setup_placeholder_dinamis(w, self.current_theme == 'dark')
-            # Tangkap Tab/Shift+Tab sebelum diproses oleh QTableWidget.
+        for w in [
+            txt_nama,
+            txt_koli,
+            txt_berat,
+            txt_volume,
+        ]:
+            setup_placeholder_dinamis(
+                w,
+                self.current_theme == "dark",
+            )
+
+            input_qss = getattr(
+                self,
+                "_detail_barang_input_qss",
+                "",
+            )
+
+            if input_qss:
+                w.setStyleSheet(input_qss)
+
+            # Tangkap Tab/Shift+Tab sebelum diproses QTableWidget.
             w.installEventFilter(self)
 
         self.table_items.setCellWidget(row_count, self.KOL_NAMA_BARANG, txt_nama)

@@ -1,17 +1,15 @@
 # main.py
 import sys
 import os
-import ctypes
+import faulthandler
+import traceback
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QTabWidget, QTabBar,
-                             QStylePainter, QStyleOptionTab, QStyle, QDialog,
-                             QLineEdit, QTextEdit)
-from PyQt5.QtCore import Qt, QSettings, QObject, QEvent, QTimer, QLocale
-from PyQt5.QtGui import QColor, QFontDatabase, QFont
+                             QDialog)
+from PyQt5.QtCore import Qt, QSettings, QLocale
+from PyQt5.QtGui import QFontDatabase, QFont
 
 from utils.typography import get_master_font
-from utils.placeholder_helper import setup_placeholder_dinamis
-from utils.cursor_helper import terapkan_kursor_global
 
 from config import DATA_CLIENT, CURRENT_SESSION, muat_pengaturan_sistem
 
@@ -33,45 +31,7 @@ from tabs.tab_armada.tab_armada import TabArmada
 
 from tabs.tab_setting import TabSettingSistem
 
-class GlobalPlaceholderManager(QObject):
-    def eventFilter(self, obj, event):
-        if (
-            event.type() == QEvent.Polish
-            and isinstance(obj, (QLineEdit, QTextEdit))
-            and obj.placeholderText()
-        ):
-            setup_placeholder_dinamis(
-                obj,
-                is_dark=False,
-            )
-
-        return False
-
-
-class FloatingIndicatorTabBar(QTabBar):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.is_dark = False
-
-    def set_dark_theme(self, is_dark):
-        self.is_dark = is_dark
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QStylePainter(self)
-        option = QStyleOptionTab()
-        for i in range(self.count()):
-            self.initStyleOption(option, i)
-            painter.drawControl(QStyle.CE_TabBarTab, option)
-            if i == self.currentIndex():
-                rect = self.tabRect(i)
-                line_width = 40
-                line_height = 3
-                x = rect.x() + (rect.width() - line_width) // 2
-                y = rect.y() + 10
-                color = QColor("#3b82f6") if self.is_dark else QColor("#2563eb")
-                painter.fillRect(x, y, line_width, line_height, color)
-
+ENABLE_GLOBAL_SCROLLBAR_STYLE = True
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -101,13 +61,13 @@ class MainWindow(QMainWindow):
                 )
             )
 
-        self.scrollbar_manager = GlobalScrollbarManager(
-            root_widget=self,
-            is_dark_getter=lambda: (
-                self.current_theme == "dark"
-            ),
-        )
-        self.scrollbar_manager.install(app)
+        self.scrollbar_manager = None
+
+        if ENABLE_GLOBAL_SCROLLBAR_STYLE:
+            self.scrollbar_manager = GlobalScrollbarManager(
+                root_widget=self,
+            )
+            self.scrollbar_manager.install(app)
 
         self.init_ui()
 
@@ -122,7 +82,7 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName("MainTabs")
-        self.custom_tab_bar = FloatingIndicatorTabBar(self)
+        self.custom_tab_bar = QTabBar(self)
         self.custom_tab_bar.setObjectName("MainTabBar")
         self.tabs.setTabBar(self.custom_tab_bar)
         self.tabs.setElideMode(Qt.ElideNone)
@@ -181,13 +141,33 @@ class MainWindow(QMainWindow):
 
         from PyQt5.QtWidgets import QScroller, QScrollArea, QTableWidget
 
-        for widget in self.findChildren(QScrollArea):
-            QScroller.grabGesture(widget.viewport(), QScroller.LeftMouseButtonGesture)
-
+        # Per-pixel scrolling tetap dipertahankan.
         for table in self.findChildren(QTableWidget):
             table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
             table.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
-            QScroller.grabGesture(table.viewport(), QScroller.LeftMouseButtonGesture)
+
+        # Gesture QScroller tidak dibutuhkan pada desktop mouse/keyboard.
+        # Event filter native QScroller pada banyak viewport dapat membuat
+        # penghancuran widget tidak stabil saat aplikasi ditutup.
+        self._touch_scroll_aktif = False
+        self._viewport_scroller = []
+
+        if self._touch_scroll_aktif:
+            for widget in self.findChildren(QScrollArea):
+                viewport = widget.viewport()
+                QScroller.grabGesture(
+                    viewport,
+                    QScroller.LeftMouseButtonGesture,
+                )
+                self._viewport_scroller.append(viewport)
+
+            for table in self.findChildren(QTableWidget):
+                viewport = table.viewport()
+                QScroller.grabGesture(
+                    viewport,
+                    QScroller.LeftMouseButtonGesture,
+                )
+                self._viewport_scroller.append(viewport)
 
         self.tabs.currentChanged.connect(self.refresh_tab_utama_diklik)
         self.apply_theme()
@@ -253,8 +233,10 @@ class MainWindow(QMainWindow):
         except Exception as error:
             print(
                 "[Tema] Gagal menerapkan tema pada "
-                f"{tab_widget.__class__.__name__}: {error}"
+                f"{tab_widget.__class__.__name__}: "
+                f"{type(error).__name__}: {error}"
             )
+            traceback.print_exc()
 
         finally:
             tab_widget.setUpdatesEnabled(True)
@@ -278,14 +260,14 @@ class MainWindow(QMainWindow):
                 fungsi_refresh()
 
         elif "Manifest" in nama_tab:
-            fungsi_refresh_armada = getattr(
+            fungsi_refresh_manifest = getattr(
                 self.tab_manifest,
                 "setup_autocomplete_truk",
                 None,
             )
 
-            if callable(fungsi_refresh_armada):
-                fungsi_refresh_armada()
+            if callable(fungsi_refresh_manifest):
+                fungsi_refresh_manifest()
 
     def update_session_ui(self):
         nama_perusahaan = DATA_CLIENT.get('nama_perusahaan', 'PT EKSPEDISI KARGO')
@@ -313,6 +295,7 @@ class MainWindow(QMainWindow):
                 "theme",
                 self.current_theme,
             )
+            self.settings.sync()
 
             self.apply_theme(force=True)
 
@@ -351,10 +334,6 @@ class MainWindow(QMainWindow):
                 shell_styles["corner"]
             )
 
-            self.custom_tab_bar.set_dark_theme(
-                is_dark
-            )
-
             self.btn_theme.setText(
                 "☀️ Mode Terang"
                 if is_dark
@@ -373,10 +352,6 @@ class MainWindow(QMainWindow):
             ):
                 button.setStyleSheet(style_btn)
 
-            self.scrollbar_manager.refresh_semua(
-                force=force,
-            )
-
         finally:
             self.setUpdatesEnabled(True)
             self.update()
@@ -384,12 +359,11 @@ class MainWindow(QMainWindow):
         tab_aktif = self.tabs.currentWidget()
 
         if tab_aktif is not None:
-            QTimer.singleShot(
-                0,
-                lambda tab=tab_aktif: self._terapkan_tema_lokal(
-                    tab,
-                    force=force,
-                ),
+            # Hindari callback lambda tertunda yang dapat tersisa ketika
+            # widget atau QApplication sedang dihancurkan.
+            self._terapkan_tema_lokal(
+                tab_aktif,
+                force=force,
             )
 
     def buka_dasbor_pengaturan(self):
@@ -425,6 +399,32 @@ class MainWindow(QMainWindow):
 
         self.dialog_setting.exec_()
 
+    def closeEvent(self, event):
+        """Melepas resource native sebelum MainWindow dihancurkan."""
+        try:
+            from PyQt5.QtWidgets import QScroller
+
+            for viewport in getattr(self, "_viewport_scroller", []):
+                try:
+                    QScroller.ungrabGesture(viewport)
+                except (RuntimeError, TypeError):
+                    pass
+
+            self._viewport_scroller = []
+
+            dialog = getattr(self, "dialog_setting", None)
+            if dialog is not None:
+                try:
+                    dialog.close()
+                except RuntimeError:
+                    pass
+
+            self._cache_tema_tab.clear()
+
+        finally:
+            super().closeEvent(event)
+
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, 'dialog_setting') and self.dialog_setting.isVisible():
@@ -459,6 +459,7 @@ class MainWindow(QMainWindow):
             f"zoom_{tab_name}",
             new_z,
         )
+        self.settings.sync()
 
         self._terapkan_tema_lokal(
             active_tab,
@@ -539,8 +540,8 @@ def konfigurasi_font_aplikasi(app):
     if font_aktif not in font_tersedia:
         print(f"⚠️ Font '{font_aktif}' tidak tersedia.")
 
-        if "Inter" in font_tersedia:
-            font_aktif = "Inter"
+        if "Roboto" in font_tersedia:
+            font_aktif = "Roboto"
         else:
             font_aktif = app.font().family()
 
@@ -567,11 +568,6 @@ def jalankan_aplikasi():
 
     DATA_CLIENT.update(muat_pengaturan_sistem())
 
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except (AttributeError, OSError):
-        pass
-
     QApplication.setAttribute(
         Qt.AA_EnableHighDpiScaling,
         True,
@@ -590,11 +586,9 @@ def jalankan_aplikasi():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    print("[NATIVE] QApplication dibuat", flush=True)
+    faulthandler.enable(all_threads=True)
 
-    placeholder_manager = GlobalPlaceholderManager()
-    app.installEventFilter(placeholder_manager)
-
-    terapkan_kursor_global(app)
     konfigurasi_font_aplikasi(app)
 
     window_holder = {
@@ -615,20 +609,19 @@ def jalankan_aplikasi():
         main_window.raise_()
         main_window.activateWindow()
 
-        for widget in main_window.findChildren(
-            (QLineEdit, QTextEdit)
-        ):
-            if widget.isVisible():
-                widget.style().unpolish(widget)
-                widget.style().polish(widget)
-                widget.update()
-
     login_window = LoginWindow(
         buka_dashboard_kargo
     )
+
+    app._login_window = login_window
+    app._window_holder = window_holder
     login_window.show()
 
-    return app.exec_()
+    print("[NATIVE] Memulai event loop", flush=True)
+    exit_code = app.exec_()
+    print(f"[NATIVE] Event loop selesai: {exit_code}", flush=True)
+
+    return exit_code
 
 
 if __name__ == "__main__":

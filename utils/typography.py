@@ -6,7 +6,7 @@ from PyQt5.QtCore import QSettings
 ORGANIZATION_NAME = "AplikasiEkspedisi"
 APPLICATION_NAME = "PengaturanUI"
 
-DEFAULT_FONT = "Inter"
+DEFAULT_FONT = "Roboto"
 MIN_FONT_SIZE = 8
 
 settings_ui = QSettings(

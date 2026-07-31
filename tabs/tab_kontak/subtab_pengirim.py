@@ -13,6 +13,7 @@ from themes.modules.kontak_armada import get_kontak_riwayat_styles
 
 from utils.typography import MASTER_FONT, get_global_font_sizes
 from utils.widget_helpers import paksa_kapital_lineedit as helper_paksa_kapital_lineedit
+from utils.placeholder_helper import terap_semua_placeholder_dinamis
 import utils.zoom as zoom_helper
 from utils.mixins import ZoomTableMixin
 from utils.table_helper import buat_tabel_item
@@ -44,6 +45,8 @@ class SubTabPengirim(QWidget, ZoomTableMixin):
 
         # --- PANEL KIRI: DATA UTAMA ---
         self.panel_kiri = QWidget()
+        self.panel_kiri.setMinimumWidth(400)
+        self.panel_kiri.setMaximumWidth(1400)
         layout_kiri = QVBoxLayout(self.panel_kiri)
         layout_kiri.setContentsMargins(0, 0, 5, 0)
         layout_kiri.setSpacing(10)
@@ -56,7 +59,7 @@ class SubTabPengirim(QWidget, ZoomTableMixin):
 
         self.txt_cari = QLineEdit()
         self.txt_cari.setPlaceholderText("Cari pengirim...")
-        #self.txt_cari.setProperty("zoom_font_key", "sz_input")
+        self.txt_cari.setProperty("zoom_font_key", "sz_input")
         self.txt_cari.setFixedWidth(230)
         self.txt_cari.setFixedHeight(30)
         self.txt_cari.textChanged.connect(lambda _t: helper_paksa_kapital_lineedit(self.txt_cari))
@@ -84,7 +87,7 @@ class SubTabPengirim(QWidget, ZoomTableMixin):
         header_kiri = self.tabel_pengirim.horizontalHeader()
         header_kiri.setSectionResizeMode(QHeaderView.Interactive)
         header_kiri.setSectionsClickable(True)
-        header_kiri.setSectionsMovable(True)
+        header_kiri.setSectionsMovable(False)
 
         self.load_lebar_kolom(self.tabel_pengirim)
 
@@ -95,6 +98,8 @@ class SubTabPengirim(QWidget, ZoomTableMixin):
 
         # --- PANEL KANAN: HISTORI TRANSAKSI ---
         self.panel_kanan = QFrame()
+        self.panel_kanan.setMinimumWidth(400)
+        self.panel_kanan.setMaximumWidth(1400)
         self.panel_kanan.setObjectName("panelHistori")
         layout_kanan = QVBoxLayout(self.panel_kanan)
         layout_kanan.setContentsMargins(10, 10, 10, 10)
@@ -108,7 +113,7 @@ class SubTabPengirim(QWidget, ZoomTableMixin):
         self.txt_cari_histori = QLineEdit()
         self.txt_cari_histori.setPlaceholderText("Cari di histori ini...")
         self.txt_cari_histori.setFixedHeight(30)
-        #self.txt_cari_histori.setProperty("zoom_font_key", "sz_input")
+        self.txt_cari_histori.setProperty("zoom_font_key", "sz_input")
         self.txt_cari_histori.textChanged.connect(lambda _t: helper_paksa_kapital_lineedit(self.txt_cari_histori))
         self.txt_cari_histori.textChanged.connect(self.filter_pencarian_histori)
         layout_kanan.addWidget(self.txt_cari_histori)
@@ -124,7 +129,7 @@ class SubTabPengirim(QWidget, ZoomTableMixin):
         header_kanan = self.tabel_histori.horizontalHeader()
         header_kanan.setSectionResizeMode(QHeaderView.Interactive)
         header_kanan.setSectionsClickable(True)
-        header_kanan.setSectionsMovable(True)
+        header_kanan.setSectionsMovable(False)
 
         self.load_lebar_kolom_histori(self.tabel_histori)
 
@@ -135,6 +140,9 @@ class SubTabPengirim(QWidget, ZoomTableMixin):
 
         self.splitter.addWidget(self.panel_kiri)
         self.splitter.addWidget(self.panel_kanan)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
         self.splitter.setSizes([650, 450])
 
         self.load_data_pengirim()
@@ -304,6 +312,17 @@ class SubTabPengirim(QWidget, ZoomTableMixin):
         super().showEvent(event)
 
         self.load_data_pengirim()
+
+        win = self.window()
+        is_dark = bool(
+            win
+            and hasattr(win, "current_theme")
+            and win.current_theme == "dark"
+        )
+        terap_semua_placeholder_dinamis(
+            self,
+            is_dark=is_dark,
+        )
         # Tema dikelola oleh TabKontak.
 
     def sesuaikan_tema_lokal(self):
@@ -367,3 +386,9 @@ class SubTabPengirim(QWidget, ZoomTableMixin):
         self.panel_kanan.layout().setContentsMargins(10, 10, 10, 10)
         self.panel_kanan.layout().setSpacing(10)
 
+        # Placeholder miring hanya ketika input kosong.
+        # Teks aktif selalu kembali ke font normal.
+        terap_semua_placeholder_dinamis(
+            self,
+            is_dark=is_dark,
+        )

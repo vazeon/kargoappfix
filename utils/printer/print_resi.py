@@ -1,8 +1,11 @@
 # utils/printer/print_resi.py
 from __future__ import annotations
 
+import base64
 import html
 import json
+import mimetypes
+from pathlib import Path
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
@@ -27,6 +30,41 @@ from .common import (
 def _esc(value: Any) -> str:
     return html.escape(
         str(value if value is not None else "")
+    )
+
+
+def _buat_logo_gambar_html() -> str:
+    """Membaca logo lokal dan menanamkannya ke HTML sebagai Base64.
+
+    Lokasi default logo:
+        <root_project>/assets/logo_mahkota_kargo.png
+
+    Lokasi dapat diganti melalui DATA_CLIENT["logo_path"].
+    Path relatif akan dihitung dari root project.
+    """
+    root_project = Path(__file__).resolve().parents[2]
+    nilai_path = (
+        DATA_CLIENT.get("logo_path")
+        or "assets/logo/logo_mahkota_kargo.png"
+    )
+
+    logo_path = Path(str(nilai_path)).expanduser()
+    if not logo_path.is_absolute():
+        logo_path = root_project / logo_path
+
+    try:
+        data_logo = logo_path.read_bytes()
+    except (OSError, TypeError, ValueError):
+        # Jika file belum ada/rusak, resi tetap dapat dicetak tanpa logo.
+        return ""
+
+    mime_type, _ = mimetypes.guess_type(logo_path.name)
+    mime_type = mime_type or "image/png"
+    encoded = base64.b64encode(data_logo).decode("ascii")
+
+    return (
+        f'<img src="data:{mime_type};base64,{encoded}" '
+        'height="34" alt="Logo Mahkota Kargo">'
     )
 
 
@@ -176,6 +214,12 @@ def cetak_resi_ke_printer(
     logo_text_html = (
         DATA_CLIENT.get("logo_text_html")
         or _esc(comp_name)
+    )
+    logo_image_html = _buat_logo_gambar_html()
+    logo_cell_html = (
+        f'<td class="brand-logo-cell">{logo_image_html}</td>'
+        if logo_image_html
+        else ""
     )
 
     tipe_pajak = str(
@@ -399,8 +443,20 @@ def cetak_resi_ke_printer(
                 border-collapse: collapse;
                 margin-bottom: 5px;
             }}
+            .brand-table {{
+                border-collapse: collapse;
+                border: none;
+            }}
+            .brand-table td {{
+                border: none;
+                padding: 0;
+                vertical-align: middle;
+            }}
+            .brand-table .brand-logo-cell {{
+                padding-right: 7px;
+            }}
             .logo-text {{
-                font-size: 16pt;
+                font-size: 15pt;
                 font-weight: bold;
                 color: #0d47a1;
                 white-space: nowrap;
@@ -516,13 +572,20 @@ def cetak_resi_ke_printer(
     <body>
         <table class="header-table">
             <tr>
-                <td width="35%" valign="middle"
+                <td width="38%" valign="middle"
                     style="white-space: nowrap;">
-                    <span class="logo-text">
-                        {logo_text_html}
-                    </span>
+                    <table class="brand-table" cellpadding="0" cellspacing="0">
+                        <tr>
+                            {logo_cell_html}
+                            <td>
+                                <span class="logo-text">
+                                    {logo_text_html}
+                                </span>
+                            </td>
+                        </tr>
+                    </table>
                 </td>
-                <td width="40%" class="comp-details"
+                <td width="37%" class="comp-details"
                     valign="middle">
                     <strong>{_esc(comp_name)}</strong><br>
                     📍 {_esc(comp_address)}<br>

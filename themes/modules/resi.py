@@ -1,8 +1,6 @@
 # themes/modules/resi.py
 from utils.typography import MASTER_FONT, get_global_font_sizes
 
-from themes.scrollbar import get_scrollbar_style
-
 
 def get_resi_static_styles(is_dark: bool) -> dict:
     """Style awal yang dapat dipakai sebelum proses refresh tema lengkap."""
@@ -82,6 +80,81 @@ def get_resi_rekening_styles(is_dark: bool, z: int = 0) -> dict:
         ),
     }
 
+def get_resi_detail_barang_theme(
+    is_dark: bool,
+    sz_base: int,
+) -> dict:
+    """Warna dan style khusus tabel Detail Barang tanpa mengubah scrollbar."""
+
+    if is_dark:
+        table_bg = "#1d2024"
+        table_alt = "#25282e"
+        table_text = "#ffffff"
+        table_grid = "#2d3139"
+        input_border = "#4c525e"
+        placeholder = "#9ca3af"
+        header_bg = "#31353d"
+        header_separator = "#64748b"
+        selection_bg = "#3b82f6"
+    else:
+        table_bg = "#ffffff"
+        table_alt = "#f8fafc"
+        table_text = "#0f172a"
+        table_grid = "#e2e8f0"
+        input_border = "#cbd5e1"
+        placeholder = "#94a3b8"
+        header_bg = "#243752"
+        header_separator = "#a8b7c8"
+        selection_bg = "#2563eb"
+
+    return {
+        "background": table_bg,
+        "alternate_background": table_alt,
+        "text": table_text,
+        "grid": table_grid,
+        "selection_background": selection_bg,
+        "selection_text": "#ffffff",
+
+        "header": f"""
+            QHeaderView::section {{
+                font-size: {sz_base}px;
+                font-family: '{MASTER_FONT}';
+                background-color: {header_bg};
+                color: #ffffff;
+                font-weight: bold;
+                padding: 6px;
+                border: none;
+                border-right: 2px solid {header_separator};
+                border-bottom: 1px solid {header_separator};
+            }}
+        """,
+
+        "cell_input": f"""
+            QLineEdit {{
+                font-size: {sz_base}px;
+                font-family: '{MASTER_FONT}';
+                background-color: {table_bg};
+                color: {table_text};
+                border: 1px solid {input_border};
+                border-radius: 0px;
+                padding: 4px;
+            }}
+
+            QLineEdit:focus {{
+                border: 1px solid {selection_bg};
+            }}
+
+            QLineEdit[custom_italic="true"][is_empty="true"] {{
+                font-style: italic;
+                color: {placeholder};
+            }}
+
+            QLineEdit[custom_italic="true"][is_empty="false"] {{
+                font-style: normal;
+            }}
+        """,
+    }
+
 
 def get_resi_styles(
     is_dark: bool,
@@ -101,6 +174,7 @@ def get_resi_styles(
             "#4c525e",
             "#3f434d",
         )
+        c_header_separator = "#64748b"
         c_text, c_text_mut, c_text_dim = "#ffffff", "#cbd5e1", "#9ca3af"
         c_foc, c_bg_foc, c_head, c_grid = (
             "#3b82f6",
@@ -119,6 +193,7 @@ def get_resi_styles(
             "#cbd5e1",
             "#cbd5e1",
         )
+        c_header_separator = "#a8b7c8"
         c_text, c_text_mut, c_text_dim = "#0f172a", "#1e293b", "#64748b"
         c_foc, c_bg_foc, c_head, c_grid = (
             "#2563eb",
@@ -192,45 +267,16 @@ def get_resi_styles(
             padding: 6px 12px;
             font-family: '{MASTER_FONT}';
         }}
-        QGroupBox::title {{ color: {c_text}; }}
+
+        QGroupBox::title {{
+            color: {c_text};
+        }}
+
         QLabel {{
             color: {c_text_mut};
             font-size: {sz_sm}px;
             font-family: '{MASTER_FONT}';
         }}
-        QTableWidget {{
-            font-size: {sz_base}px;
-            background-color: {c_bg};
-            color: {c_text};
-            border: 1px solid {c_bord};
-            gridline-color: {c_grid};
-            border-radius: 6px;
-            font-family: '{MASTER_FONT}';
-        }}
-        QTableWidget QLineEdit {{
-            font-size: {sz_base}px;
-            background-color: {c_bg};
-            color: {c_text};
-            border: 1px solid {c_bord};
-            border-radius: 4px;
-            padding: 4px;
-            font-family: '{MASTER_FONT}';
-        }}
-        QTableWidget QLineEdit[custom_italic="true"][is_empty="true"] {{
-            font-style: italic;
-            font-size: {sz_base}px;
-            color: {c_text_dim};
-        }}
-        QHeaderView::section {{
-            font-size: {sz_base}px;
-            background-color: {c_head};
-            color: white;
-            font-weight: bold;
-            padding: 6px;
-            border: none;
-            font-family: '{MASTER_FONT}';
-        }}
-        {get_scrollbar_style(is_dark)}
     """
 
     rekening_styles = get_resi_rekening_styles(is_dark, z)
@@ -339,7 +385,6 @@ def get_resi_styles(
             }}
         """,
         "input_utama": input_style,
-        "widget_kiri": "background-color: transparent;",
         "scroll_kiri": static_styles["scroll_kiri"],
         "splitter": "QSplitter::handle { background-color: transparent; }",
         "btn_generate_simpan": f"""

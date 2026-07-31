@@ -12,16 +12,18 @@ from config import CURRENT_SESSION, DATA_CLIENT
 
 import services.database_service as db_service
 
+from utils.frozen_table_helper import FrozenTableWidget
 from utils import zoom as zoom_helper
 from utils.typography import get_global_font_sizes
 from utils.number_formatters import (format_ke_rupiah, rupiah_to_int, format_angka_indonesia,
                                      angka_indonesia_to_decimal)
 from utils.date_ind_format import format_tanggal_ke_ui
 from utils.table_helper import buat_tabel_item
-from utils.validators import (get_decimal_validator, get_integer_validator)
-from utils.widget_helpers import (paksa_kapital_lineedit)
+from utils.validators import get_decimal_validator, get_integer_validator
+from utils.widget_helpers import paksa_kapital_lineedit
+from utils.placeholder_helper import terap_semua_placeholder_dinamis
+
 from themes.modules.buku_gudang import (
-    BUKU_GUDANG_INLINE_EDITOR_STYLE,
     get_buku_gudang_action_styles,
     get_buku_gudang_menu_style,
     get_buku_gudang_status_colors,
@@ -76,6 +78,17 @@ class DialogPilihPenagih(QDialog):
 
         self.btn_lanjut.clicked.connect(self.validasi_dan_lanjut)
         self.btn_batal.clicked.connect(self.reject)
+
+        window = self.window()
+        is_dark = bool(
+            window
+            and hasattr(window, "current_theme")
+            and window.current_theme == "dark"
+        )
+        terap_semua_placeholder_dinamis(
+            self,
+            is_dark=is_dark,
+        )
 
     def validasi_dan_lanjut(self):
         if self.rb_ketiga.isChecked() and not self.txt_ketiga.text().strip():
@@ -390,7 +403,7 @@ class TabBukuGudang(QWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 5, 0, 0)
 
-        tabel = QTableWidget()
+        tabel = FrozenTableWidget(frozen_cols=2)
         tabel.setColumnCount(17)
         headers = ["NO.", "RESI", "MASUK", "KELUAR", "STATUS", "TRUK", "PENGIRIM",
                    "KOTA ASAL", "PENERIMA", "KOTA TUJUAN", "NAMA BARANG",
@@ -410,7 +423,7 @@ class TabBukuGudang(QWidget):
         header = tabel.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setSectionsClickable(True)
-        header.setSectionsMovable(True)
+        header.setSectionsMovable(False)
 
         tabel.horizontalHeader().sectionResized.connect(
             lambda logicalIndex, oldSize, newSize, t=tabel: self.simpan_lebar_kolom(t)
@@ -449,6 +462,11 @@ class TabBukuGudang(QWidget):
         is_dark = win.current_theme == "dark" if win and hasattr(win, 'current_theme') else (
                 "#25282e" in QApplication.instance().styleSheet().lower())
 
+        terap_semua_placeholder_dinamis(
+            self,
+            is_dark=is_dark,
+        )
+
         z = zoom_helper.dapatkan_zoom_level(self.__class__.__name__)
 
         font_statis = get_global_font_sizes(0)
@@ -467,6 +485,8 @@ class TabBukuGudang(QWidget):
             sz_input=font_dinamis["sz_input"],
             sz_title=font_dinamis["sz_title"],
         )
+
+        self.inline_editor_style = styles_dinamis["inline_editor"]
 
         # 1. Elemen Atas (Statis)
         self.lbl_judul.setStyleSheet(styles_statis["lbl_judul"])
@@ -492,6 +512,10 @@ class TabBukuGudang(QWidget):
                 faktor = max(0.68, min(1.0 + (z * 0.08), 1.80))
                 tinggi_baris = max(24, int(32 * faktor))
                 widget.tabel.verticalHeader().setDefaultSectionSize(tinggi_baris)
+
+                if hasattr(widget.tabel, "frozen_table"):
+                    widget.tabel.frozen_table.horizontalHeader().setFont(header_font)
+                    widget.tabel.frozen_table.verticalHeader().setDefaultSectionSize(tinggi_baris)
 
                 # 5. KUNCI: Blokir signal agar tabel tidak melompat
                 widget.tabel.horizontalHeader().blockSignals(True)
@@ -666,7 +690,9 @@ class TabBukuGudang(QWidget):
                 else:
                     line_edit.setText(teks_asal.strip())
 
-                line_edit.setStyleSheet(BUKU_GUDANG_INLINE_EDITOR_STYLE)
+                line_edit.setStyleSheet(
+                    getattr(self, "inline_editor_style", "")
+                )
 
                 if col == self.KOL_KOLI:
                     line_edit.setValidator(

@@ -128,10 +128,16 @@ def get_manifest_styles(is_dark: bool, is_edit_mode: bool, z: int = 0) -> dict:
         QPushButton:hover {{ background-color: {warna_btn_hover}; }}
     """
 
-    panel_kiri = (
-        "QWidget { border: none; background-color: transparent; } "
-        f"QLabel {{ font-size: {sz_base}px; font-family: '{MASTER_FONT}'; color: {panel_text}; }}"
-    )
+    panel_kiri = f"""
+        QLabel {{
+            font-size: {sz_base}px;
+            font-family: '{MASTER_FONT}';
+            color: {panel_text};
+            background-color: transparent;
+            border: none;
+        }}
+    """
+
     panel_kanan = panel_kiri
 
     return {

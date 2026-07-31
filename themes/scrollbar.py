@@ -8,27 +8,14 @@ from pathlib import Path
 from tempfile import gettempdir
 from typing import Callable, Dict, Optional
 
-from PyQt5.QtCore import QEvent, QObject
+from PyQt5.QtCore import QObject
 from PyQt5.QtWidgets import QApplication, QScrollBar, QWidget
 
 
 @lru_cache(maxsize=2)
-def _buat_icon_panah(is_dark: bool) -> Dict[str, str]:
-    """
-    Membuat ikon panah SVG secara otomatis di folder temporary.
-
-    Ikon dibuat untuk:
-    - panah atas;
-    - panah bawah;
-    - panah kiri;
-    - panah kanan.
-
-    Dengan cara ini, modul scrollbar tidak memerlukan file PNG atau SVG
-    tambahan di dalam folder project. Ikon tetap tersedia ketika aplikasi
-    dipindahkan atau dibundel menjadi executable.
-    """
-    warna_panah = "#d8dee9" if is_dark else "#475569"
-    nama_tema = "dark" if is_dark else "light"
+def _buat_icon_panah() -> Dict[str, str]:
+    warna_panah = "#64748b"
+    nama_tema = "neutral"
 
     folder_icon = (
         Path(gettempdir())
@@ -84,57 +71,22 @@ def _buat_icon_panah(is_dark: bool) -> Dict[str, str]:
     return hasil
 
 
-def get_scrollbar_style(is_dark: bool) -> str:
-    """
-    Menghasilkan satu style scrollbar yang konsisten untuk seluruh aplikasi.
+def get_scrollbar_style() -> str:
+    warna_handle = "rgba(100, 116, 139, 150)"
+    warna_hover = "rgba(100, 116, 139, 210)"
+    warna_track_hover = "rgba(100, 116, 139, 28)"
+    warna_pressed = "rgba(71, 85, 105, 235)"
+    warna_tombol_hover = "rgba(100, 116, 139, 42)"
+    warna_tombol_pressed = "rgba(71, 85, 105, 68)"
 
-    Style dibuat sama untuk:
-    - QScrollArea
-    - QTableWidget
-    - QTreeWidget
-    - QListWidget
-    - QTextEdit
-    - dialog dan widget lain yang memiliki QScrollBar
-
-    Perilaku scrollbar:
-    - track transparan ketika tidak disorot;
-    - track terlihat ketika cursor berada di area scrollbar;
-    - handle lebih terang ketika disorot;
-    - handle memiliki warna khusus ketika ditekan;
-    - tombol panah tersedia untuk vertikal dan horizontal;
-    - tombol panah ikut ter-highlight ketika disorot atau ditekan.
-    """
-    # Warna asli tetap dipertahankan sebagai warna dasar handle.
-    warna_handle = "#3f434d" if is_dark else "#cbd5e1"
-    warna_hover = "#4c525e" if is_dark else "#94a3b8"
-
-    if is_dark:
-        warna_track_hover = "rgba(255, 255, 255, 18)"
-        warna_pressed = "#858d9a"
-        warna_tombol_hover = "rgba(255, 255, 255, 28)"
-        warna_tombol_pressed = "rgba(255, 255, 255, 42)"
-    else:
-        warna_track_hover = "rgba(15, 23, 42, 18)"
-        warna_pressed = "#64748b"
-        warna_tombol_hover = "rgba(15, 23, 42, 24)"
-        warna_tombol_pressed = "rgba(15, 23, 42, 38)"
-
-    icon_panah = _buat_icon_panah(is_dark)
+    icon_panah = _buat_icon_panah()
 
     # Ukuran 16px menyediakan ruang yang cukup untuk handle dan tombol panah.
     ukuran_scrollbar = 16
     ukuran_icon_panah = 8
 
     return f"""
-        QScrollArea {{
-            background-color: transparent;
-            border: none;
-        }}
-
-        /* ================================================================
-         * SCROLLBAR VERTIKAL
-         * ================================================================ */
-
+        
         QScrollBar:vertical {{
             border: none;
             background: transparent;
@@ -209,9 +161,7 @@ def get_scrollbar_style(is_dark: bool) -> str:
             border: none;
         }}
 
-        /* ================================================================
-         * SCROLLBAR HORIZONTAL
-         * ================================================================ */
+        
 
         QScrollBar:horizontal {{
             border: none;
@@ -291,65 +241,127 @@ def get_scrollbar_style(is_dark: bool) -> str:
 
 class GlobalScrollbarManager(QObject):
     """
-    Memasang style scrollbar secara global tanpa mengganti stylesheet
-    QApplication setiap kali tema berubah.
+    Memasang satu blok QSS scrollbar netral pada QApplication.
 
-    Scrollbar yang sudah ada diperbarui melalui refresh_semua().
-    Scrollbar yang dibuat kemudian akan tertangani otomatis oleh event filter.
+    Style dipasang sekali saat startup. Pergantian tema aplikasi tidak memicu
+    setStyleSheet() ulang, sehingga tidak menyebabkan repolish global.
     """
+
+    STYLE_START = "/* __GLOBAL_SCROLLBAR_STYLE_START__ */"
+    STYLE_END = "/* __GLOBAL_SCROLLBAR_STYLE_END__ */"
 
     def __init__(
         self,
         root_widget: QWidget,
-        is_dark_getter: Callable[[], bool],
+        is_dark_getter: Optional[Callable[[], bool]] = None,
     ):
         super().__init__(root_widget)
 
         self.root_widget = root_widget
+        # Parameter dipertahankan agar main.py lama tetap kompatibel.
         self.is_dark_getter = is_dark_getter
         self._app: Optional[QApplication] = None
         self._installed = False
+        self._sedang_refresh = False
 
-    def _is_dark(self) -> bool:
-        try:
-            return bool(self.is_dark_getter())
-        except Exception:
-            return False
+    @classmethod
+    def _hapus_blok_lama(cls, stylesheet: str) -> str:
+        """
+        Menghapus semua blok QSS scrollbar yang pernah ditambahkan manager.
+        """
+        hasil = str(stylesheet or "")
 
-    def _signature(self) -> str:
-        return "dark" if self._is_dark() else "light"
+        while True:
+            posisi_awal = hasil.find(cls.STYLE_START)
+            if posisi_awal < 0:
+                break
+
+            posisi_akhir = hasil.find(
+                cls.STYLE_END,
+                posisi_awal + len(cls.STYLE_START),
+            )
+
+            if posisi_akhir < 0:
+                hasil = hasil[:posisi_awal]
+                break
+
+            posisi_akhir += len(cls.STYLE_END)
+            hasil = hasil[:posisi_awal] + hasil[posisi_akhir:]
+
+        return hasil.strip()
+
+    @classmethod
+    def _stylesheet_gabungan(cls, stylesheet_dasar: str) -> str:
+        dasar_bersih = cls._hapus_blok_lama(stylesheet_dasar)
+        style_scrollbar = get_scrollbar_style().strip()
+
+        bagian = [
+            item
+            for item in (
+                dasar_bersih,
+                cls.STYLE_START,
+                style_scrollbar,
+                cls.STYLE_END,
+            )
+            if item
+        ]
+
+        return "\n\n".join(bagian)
 
     def install(
         self,
         app: Optional[QApplication] = None,
     ) -> None:
         """
-        Memasang event filter satu kali pada QApplication.
+        Memasang style scrollbar global satu kali.
         """
-        if self._installed:
+        if self._installed or self._sedang_refresh:
             return
 
-        self._app = app or QApplication.instance()
+        app_aktif = app or QApplication.instance()
 
-        if self._app is None:
+        if app_aktif is None:
             return
 
-        self._app.installEventFilter(self)
-        self._installed = True
+        self._sedang_refresh = True
 
-        # Tambahan: langsung terapkan style pada scrollbar yang sudah dibuat
-        # sebelum event filter dipasang.
-        self.refresh_semua(force=True)
+        try:
+            stylesheet_lama = app_aktif.styleSheet()
+            stylesheet_baru = self._stylesheet_gabungan(
+                stylesheet_lama
+            )
+
+            if stylesheet_baru != stylesheet_lama:
+                app_aktif.setStyleSheet(stylesheet_baru)
+
+            self._app = app_aktif
+            self._installed = True
+        except RuntimeError:
+            return
+        finally:
+            self._sedang_refresh = False
 
     def uninstall(self) -> None:
         """
-        Melepas event filter apabila aplikasi perlu dibersihkan.
+        Menghapus blok QSS scrollbar tanpa mengubah stylesheet lainnya.
         """
-        if self._app is not None and self._installed:
-            self._app.removeEventFilter(self)
+        app = self._app
 
-        self._installed = False
+        if app is not None:
+            try:
+                stylesheet_lama = app.styleSheet()
+                stylesheet_bersih = self._hapus_blok_lama(
+                    stylesheet_lama
+                )
+
+                if stylesheet_bersih != stylesheet_lama:
+                    app.setStyleSheet(stylesheet_bersih)
+            except RuntimeError:
+                pass
+
         self._app = None
+        self._installed = False
+        self._sedang_refresh = False
 
     def terapkan_ke_scrollbar(
         self,
@@ -357,68 +369,30 @@ class GlobalScrollbarManager(QObject):
         force: bool = False,
     ) -> None:
         """
-        Menerapkan style hanya jika tema scrollbar berubah.
+        API kompatibilitas untuk pemanggil lama.
+
+        Tidak menempelkan style per-widget dan tidak memicu restyle global.
         """
         if not isinstance(scrollbar, QScrollBar):
             return
 
-        signature = self._signature()
+        if not self._installed:
+            self.install()
 
-        if (
-            not force
-            and scrollbar.property(
-                "_global_scrollbar_theme"
-            ) == signature
-        ):
-            return
-
-        # Property dipasang sebelum setStyleSheet untuk mencegah
-        # event Polish memicu penerapan berulang.
-        scrollbar.setProperty(
-            "_global_scrollbar_theme",
-            signature,
-        )
-
-        scrollbar.setStyleSheet(
-            get_scrollbar_style(
-                signature == "dark"
-            )
-        )
+        try:
+            scrollbar.update()
+        except RuntimeError:
+            pass
 
     def refresh_semua(
         self,
         force: bool = False,
     ) -> None:
         """
-        Memperbarui seluruh scrollbar yang sudah berada di dalam MainWindow.
-        """
-        if self.root_widget is None:
-            return
+        API kompatibilitas.
 
-        for scrollbar in self.root_widget.findChildren(
-            QScrollBar
-        ):
-            self.terapkan_ke_scrollbar(
-                scrollbar,
-                force=force,
-            )
-
-    def eventFilter(
-        self,
-        obj,
-        event,
-    ):
+        Style netral tidak berubah saat tema berganti, sehingga metode ini tidak
+        memanggil QApplication.setStyleSheet() ulang.
         """
-        Menangani scrollbar baru dari tab, popup, dan dialog secara otomatis.
-        """
-        if (
-            isinstance(obj, QScrollBar)
-            and event.type()
-            in (
-                QEvent.Polish,
-                QEvent.Show,
-            )
-        ):
-            self.terapkan_ke_scrollbar(obj)
-
-        return False
+        if not self._installed:
+            self.install()

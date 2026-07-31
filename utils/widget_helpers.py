@@ -51,16 +51,35 @@ def _refresh_style_widget(
     widget: QWidget,
 ) -> None:
     """
-    Memaksa Qt mengevaluasi ulang dynamic property
-    yang digunakan pada stylesheet.
+    Meminta Qt mengevaluasi ulang dynamic property pada stylesheet.
+
+    Pengaman re-entrancy mencegah pemanggilan berulang ketika proses
+    ``polish()`` sendiri memicu event atau helper placeholder lain.
     """
-    style = widget.style()
+    if widget is None:
+        return
 
-    if style is not None:
-        style.unpolish(widget)
-        style.polish(widget)
+    if bool(getattr(widget, "_refresh_style_aktif", False)):
+        return
 
-    widget.update()
+    widget._refresh_style_aktif = True
+
+    try:
+        style = widget.style()
+
+        if style is not None:
+            style.unpolish(widget)
+            style.polish(widget)
+
+        widget.update()
+    except RuntimeError:
+        # Wrapper Python dapat tertinggal ketika objek C++ sudah dihapus.
+        return
+    finally:
+        try:
+            widget._refresh_style_aktif = False
+        except RuntimeError:
+            pass
 
 
 def paksa_kapital_lineedit(

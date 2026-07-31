@@ -14,7 +14,6 @@ from PyQt5.QtCore import QSettings, QSize, Qt
 from PyQt5.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
-    QAbstractScrollArea,
     QComboBox,
     QDateEdit,
     QDateTimeEdit,
@@ -31,7 +30,6 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QScrollBar,
     QSpinBox,
     QTabWidget,
     QTableView,
@@ -52,19 +50,46 @@ APPLICATION_NAME = "PengaturanUI"
 MIN_ZOOM_LEVEL = -4
 MAX_ZOOM_LEVEL = 10
 DEFAULT_ICON_SIZE = 18
-DEFAULT_SCROLLBAR_SIZE = 14
 DEFAULT_TABLE_ROW_HEIGHT = 32
 DEFAULT_TABLE_HEADER_HEIGHT = 36
+
+# Batas aman sebelum nilai diteruskan ke API C++ milik Qt.
+QT_GEOMETRY_MAX = 16_777_215
+MAX_COLUMN_WIDTH = 100_000
+MAX_FONT_SIZE = 96
+MAX_ICON_BASE_SIZE = 256
+MAX_ICON_RENDER_SIZE = 512
 
 settings_ui = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
 
 
-def _batasi_zoom(z: Any) -> int:
+def _int_aman(
+        value: Any,
+        default: int = 0,
+        minimum: Optional[int] = None,
+        maximum: Optional[int] = None,
+) -> int:
+    """Konversi ke int dan batasi agar aman untuk binding Qt/C++."""
     try:
-        nilai = int(z)
-    except (TypeError, ValueError):
-        nilai = 0
-    return max(MIN_ZOOM_LEVEL, min(nilai, MAX_ZOOM_LEVEL))
+        hasil = int(value)
+    except (TypeError, ValueError, OverflowError):
+        hasil = int(default)
+
+    if minimum is not None:
+        hasil = max(int(minimum), hasil)
+    if maximum is not None:
+        hasil = min(int(maximum), hasil)
+    return hasil
+
+
+def batasi_ukuran_font(value: Any, default: int = 10) -> int:
+    """Ukuran font aman untuk QFont.setPointSize/QFont constructor."""
+    minimum = _int_aman(getattr(typography, "MIN_FONT_SIZE", 8), 8, 1, 32)
+    return _int_aman(value, default, minimum, MAX_FONT_SIZE)
+
+
+def _batasi_zoom(z: Any) -> int:
+    return _int_aman(z, 0, MIN_ZOOM_LEVEL, MAX_ZOOM_LEVEL)
 
 
 def _faktor_zoom(z: Any) -> float:
@@ -72,12 +97,18 @@ def _faktor_zoom(z: Any) -> float:
     return max(0.68, min(1.0 + (zoom * 0.08), 1.80))
 
 
-def _skalakan(nilai: Any, z: Any, minimum: int = 0) -> int:
+def _skalakan(
+        nilai: Any,
+        z: Any,
+        minimum: int = 0,
+        maximum: int = QT_GEOMETRY_MAX,
+) -> int:
+    angka = _int_aman(nilai, minimum, minimum, maximum)
     try:
-        angka = int(nilai)
-    except (TypeError, ValueError):
-        angka = minimum
-    return max(minimum, round(angka * _faktor_zoom(z)))
+        hasil = round(angka * _faktor_zoom(z))
+    except (TypeError, ValueError, OverflowError):
+        hasil = minimum
+    return _int_aman(hasil, minimum, minimum, maximum)
 
 
 def _ambil_atau_simpan_dasar(objek: Any, nama: str, nilai: Any) -> Any:
@@ -87,8 +118,78 @@ def _ambil_atau_simpan_dasar(objek: Any, nama: str, nilai: Any) -> Any:
     return getattr(objek, atribut)
 
 
+def _qsize_icon_aman(
+        objek: Any,
+        nama_cache: str,
+        ukuran_saat_ini: Any,
+        default_size: int = DEFAULT_ICON_SIZE,
+) -> QSize:
+    """Mengambil ukuran dasar ikon yang valid dan menimpa cache rusak.
+
+    QSize.isValid() hanya memastikan dimensi tidak negatif. Nilai positif yang
+    sangat besar tetap dianggap valid oleh Qt, sehingga harus dibatasi manual.
+    """
+    atribut = f"_zoom_base_{nama_cache}"
+    kandidat = getattr(objek, atribut, ukuran_saat_ini)
+
+    try:
+        width = kandidat.width()
+        height = kandidat.height()
+    except (AttributeError, TypeError, RuntimeError):
+        width = default_size
+        height = default_size
+
+    width = _int_aman(
+        width,
+        default=default_size,
+        minimum=1,
+        maximum=MAX_ICON_BASE_SIZE,
+    )
+    height = _int_aman(
+        height,
+        default=default_size,
+        minimum=1,
+        maximum=MAX_ICON_BASE_SIZE,
+    )
+
+    ukuran_aman = QSize(width, height)
+
+    # Penting: cache lama yang sudah berisi nilai abnormal harus ditimpa.
+    setattr(objek, atribut, ukuran_aman)
+    return ukuran_aman
+
+
+def _ukuran_icon_terzoom(
+        ukuran_dasar: QSize,
+        faktor: float,
+        minimum: int = 12,
+) -> QSize:
+    """Menghasilkan QSize ikon yang aman untuk setIconSize()."""
+    try:
+        width = round(ukuran_dasar.width() * faktor)
+        height = round(ukuran_dasar.height() * faktor)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        width = DEFAULT_ICON_SIZE
+        height = DEFAULT_ICON_SIZE
+
+    return QSize(
+        _int_aman(
+            width,
+            default=DEFAULT_ICON_SIZE,
+            minimum=minimum,
+            maximum=MAX_ICON_RENDER_SIZE,
+        ),
+        _int_aman(
+            height,
+            default=DEFAULT_ICON_SIZE,
+            minimum=minimum,
+            maximum=MAX_ICON_RENDER_SIZE,
+        ),
+    )
+
+
 def _master_font() -> str:
-    return str(getattr(typography, "MASTER_FONT", "Inter") or "Inter")
+    return str(getattr(typography, "MASTER_FONT", "Roboto") or "Roboto")
 
 
 def _font_family_qss() -> str:
@@ -96,7 +197,7 @@ def _font_family_qss() -> str:
 
 
 def _ukuran_font_minimum() -> int:
-    return int(getattr(typography, "MIN_FONT_SIZE", 8))
+    return _int_aman(getattr(typography, "MIN_FONT_SIZE", 8), 8, 1, 32)
 
 
 def dapatkan_zoom_level(class_name: str) -> int:
@@ -115,13 +216,15 @@ def simpan_zoom_level(class_name: str, zoom_level: int) -> int:
 def generate_style_tabel(is_dark: bool, z: int = 0) -> str:
     zoom = _batasi_zoom(z)
     sizes = typography.get_global_font_sizes(zoom)
-    sz_base = sizes.get("sz_base", max(_ukuran_font_minimum(), 13 + zoom))
+    sz_base = batasi_ukuran_font(
+        sizes.get("sz_base", max(_ukuran_font_minimum(), 13 + zoom)),
+        default=13,
+    )
     font_family = _font_family_qss()
 
     padding_item = max(2, 4 + zoom)
     padding_header_v = max(4, 6 + zoom)
     padding_header_h = max(6, 8 + (zoom * 2))
-    scrollbar = _skalakan(DEFAULT_SCROLLBAR_SIZE, zoom, minimum=10)
     indicator = _skalakan(16, zoom, minimum=12)
 
     if is_dark:
@@ -176,8 +279,6 @@ def generate_style_tabel(is_dark: bool, z: int = 0) -> str:
             color: #ffffff;
         }}
 
-        QScrollBar:vertical {{ width: {scrollbar}px; }}
-        QScrollBar:horizontal {{ height: {scrollbar}px; }}
 
         QCheckBox::indicator, QRadioButton::indicator {{
             width: {indicator}px;
@@ -201,10 +302,13 @@ def _terapkan_font(widget: QWidget, z: int, key_ukuran: str) -> None:
     if key_property:
         key_ukuran = str(key_property)
 
-    ukuran = sizes.get(key_ukuran, max(_ukuran_font_minimum(), 13 + z))
+    ukuran = batasi_ukuran_font(
+        sizes.get(key_ukuran, max(_ukuran_font_minimum(), 13 + z)),
+        default=13,
+    )
     font = widget.font()
     font.setFamily(_master_font())
-    font.setPointSize(max(_ukuran_font_minimum(), int(ukuran)))
+    font.setPointSize(ukuran)
     widget.setFont(font)
 
 
@@ -213,35 +317,40 @@ def _terapkan_icon(widget: QWidget, z: int) -> None:
 
     if isinstance(widget, (QAbstractButton, QComboBox)):
         ukuran = widget.iconSize()
-        if not ukuran.isValid() or ukuran.width() <= 0:
-            ukuran = QSize(DEFAULT_ICON_SIZE, DEFAULT_ICON_SIZE)
-        dasar = _ambil_atau_simpan_dasar(widget, "icon_size", ukuran)
-        widget.setIconSize(QSize(
-            max(12, round(dasar.width() * faktor)),
-            max(12, round(dasar.height() * faktor)),
-        ))
+        dasar = _qsize_icon_aman(
+            widget,
+            "icon_size",
+            ukuran,
+            default_size=DEFAULT_ICON_SIZE,
+        )
+        widget.setIconSize(
+            _ukuran_icon_terzoom(dasar, faktor, minimum=12)
+        )
 
     elif isinstance(widget, QToolBar):
         ukuran = widget.iconSize()
-        if not ukuran.isValid() or ukuran.width() <= 0:
-            ukuran = QSize(24, 24)
-        dasar = _ambil_atau_simpan_dasar(widget, "toolbar_icon_size", ukuran)
-        widget.setIconSize(QSize(
-            max(14, round(dasar.width() * faktor)),
-            max(14, round(dasar.height() * faktor)),
-        ))
+        dasar = _qsize_icon_aman(
+            widget,
+            "toolbar_icon_size",
+            ukuran,
+            default_size=24,
+        )
+        widget.setIconSize(
+            _ukuran_icon_terzoom(dasar, faktor, minimum=14)
+        )
 
     elif isinstance(widget, QTabWidget):
         tab_bar = widget.tabBar()
         ukuran = tab_bar.iconSize()
-        if not ukuran.isValid() or ukuran.width() <= 0:
-            ukuran = QSize(DEFAULT_ICON_SIZE, DEFAULT_ICON_SIZE)
-        dasar = _ambil_atau_simpan_dasar(tab_bar, "icon_size", ukuran)
-        tab_bar.setIconSize(QSize(
-            max(12, round(dasar.width() * faktor)),
-            max(12, round(dasar.height() * faktor)),
-        ))
-
+        dasar = _qsize_icon_aman(
+            tab_bar,
+            "icon_size",
+            ukuran,
+            default_size=DEFAULT_ICON_SIZE,
+        )
+        tab_bar.setIconSize(
+            _ukuran_icon_terzoom(dasar, faktor, minimum=12)
+        )
 
 def _terapkan_tinggi_widget(widget: QWidget, z: int) -> None:
     tipe_satu_baris = (
@@ -330,20 +439,6 @@ def _terapkan_padding(widget: QWidget, z: int) -> None:
         """)
 
 
-def _terapkan_scrollbar(widget: QWidget, z: int) -> None:
-    ukuran = _skalakan(DEFAULT_SCROLLBAR_SIZE, z, minimum=10)
-    if isinstance(widget, QScrollBar):
-        if widget.orientation() == Qt.Vertical:
-            widget.setMinimumWidth(ukuran)
-        else:
-            widget.setMinimumHeight(ukuran)
-    elif isinstance(widget, QAbstractScrollArea):
-        _pasang_stylesheet_zoom(widget, f"""
-            QScrollBar:vertical {{ width: {ukuran}px; }}
-            QScrollBar:horizontal {{ height: {ukuran}px; }}
-        """)
-
-
 def terapkan_zoom_widget_standar(
         widget: QWidget,
         z: int,
@@ -356,15 +451,24 @@ def terapkan_zoom_widget_standar(
     _terapkan_icon(widget, zoom)
     _terapkan_tinggi_widget(widget, zoom)
     _terapkan_padding(widget, zoom)
-    _terapkan_scrollbar(widget, zoom)
 
     # 💡 PERBAIKAN: Jika widget punya properti 'base_width', set lebar dinamis yang ikut ter-zoom
     lebar_dasar = widget.property("base_width")
     if lebar_dasar is not None:
-        widget.setFixedWidth(max(140, _skalakan(int(lebar_dasar), zoom, minimum=100)))
+        lebar_dasar = _int_aman(lebar_dasar, 140, 100, MAX_COLUMN_WIDTH)
+        widget.setFixedWidth(
+            _skalakan(lebar_dasar, zoom, minimum=140, maximum=MAX_COLUMN_WIDTH)
+        )
 
 
 def _skalakan_kolom_tableview(table: QTableView, z: int) -> None:
+    # --- TAMBAHKAN PENGECEKAN INI ---
+    # Cek apakah tabel secara eksplisit melarang scaling kolom
+    scale_columns = table.property("zoom_scale_columns")
+    if scale_columns is False:
+        return
+    # ---------------------------------
+
     model = table.model()
     if model is None:
         return
@@ -375,12 +479,24 @@ def _skalakan_kolom_tableview(table: QTableView, z: int) -> None:
     header = table.horizontalHeader()
     for kolom in range(model.columnCount()):
         if kolom not in table._zoom_base_column_widths:
-            table._zoom_base_column_widths[kolom] = max(20, table.columnWidth(kolom))
+            table._zoom_base_column_widths[kolom] = table.columnWidth(kolom)
+
+        # Cache lama bisa saja sudah berisi angka abnormal. Normalisasi ulang
+        # sebelum dipakai sebagai argumen kedua setColumnWidth().
+        lebar_dasar = _int_aman(
+            table._zoom_base_column_widths.get(kolom),
+            default=max(20, table.columnWidth(kolom)),
+            minimum=20,
+            maximum=MAX_COLUMN_WIDTH,
+        )
+        table._zoom_base_column_widths[kolom] = lebar_dasar
 
         if header.sectionResizeMode(kolom) != QHeaderView.Stretch:
             table.setColumnWidth(
                 kolom,
-                _skalakan(table._zoom_base_column_widths[kolom], z, minimum=20),
+                _skalakan(
+                    lebar_dasar, z, minimum=20, maximum=MAX_COLUMN_WIDTH
+                ),
             )
 
 
@@ -395,11 +511,22 @@ def _skalakan_kolom_treeview(tree: QTreeView, z: int) -> None:
     header = tree.header()
     for kolom in range(model.columnCount()):
         if kolom not in tree._zoom_base_column_widths:
-            tree._zoom_base_column_widths[kolom] = max(20, tree.columnWidth(kolom))
+            tree._zoom_base_column_widths[kolom] = tree.columnWidth(kolom)
+
+        lebar_dasar = _int_aman(
+            tree._zoom_base_column_widths.get(kolom),
+            default=max(20, tree.columnWidth(kolom)),
+            minimum=20,
+            maximum=MAX_COLUMN_WIDTH,
+        )
+        tree._zoom_base_column_widths[kolom] = lebar_dasar
+
         if header.sectionResizeMode(kolom) != QHeaderView.Stretch:
             tree.setColumnWidth(
                 kolom,
-                _skalakan(tree._zoom_base_column_widths[kolom], z, minimum=20),
+                _skalakan(
+                    lebar_dasar, z, minimum=20, maximum=MAX_COLUMN_WIDTH
+                ),
             )
 
     dasar_indent = _ambil_atau_simpan_dasar(tree, "indentation", max(10, tree.indentation()))
@@ -416,32 +543,92 @@ def terapkan_zoom_tabel(
 
     zoom = _batasi_zoom(z)
     sizes = typography.get_global_font_sizes(zoom)
-    size_base = sizes.get("sz_base", max(_ukuran_font_minimum(), 13 + zoom))
+    size_base = batasi_ukuran_font(
+        sizes.get("sz_base", max(_ukuran_font_minimum(), 13 + zoom)),
+        default=13,
+    )
 
     table.setStyleSheet(generate_style_tabel(is_dark, zoom))
     font = table.font()
     font.setFamily(_master_font())
-    font.setPointSize(max(_ukuran_font_minimum(), int(size_base)))
+    font.setPointSize(size_base)
     table.setFont(font)
 
-    row_height = _skalakan(DEFAULT_TABLE_ROW_HEIGHT, zoom, minimum=24)
-    header_height = _skalakan(DEFAULT_TABLE_HEADER_HEIGHT, zoom, minimum=26)
-    icon_size = _skalakan(DEFAULT_ICON_SIZE, zoom, minimum=12)
+    # Tinggi tabel tidak cukup hanya diskalakan dari konstanta.
+    # QSS memberi padding atas dan bawah pada setiap item, sehingga tinggi
+    # baris harus memperhitungkan tinggi font aktual + seluruh padding.
+    item_padding = max(2, 4 + zoom)
+    header_padding_v = max(4, 6 + zoom)
+
+    base_row_height = _skalakan(
+        DEFAULT_TABLE_ROW_HEIGHT,
+        zoom,
+        minimum=24,
+        maximum=10_000,
+    )
+    base_header_height = _skalakan(
+        DEFAULT_TABLE_HEADER_HEIGHT,
+        zoom,
+        minimum=26,
+        maximum=10_000,
+    )
+
+    text_height = max(1, int(table.fontMetrics().height()))
+    row_height = _int_aman(
+        max(
+            base_row_height,
+            text_height + (item_padding * 2) + 8,
+        ),
+        default=base_row_height,
+        minimum=24,
+        maximum=10_000,
+    )
+
+    icon_size = _skalakan(
+        DEFAULT_ICON_SIZE,
+        zoom,
+        minimum=12,
+        maximum=4_096,
+    )
     table.setIconSize(QSize(icon_size, icon_size))
 
     if isinstance(table, QTableView):
         h_header = table.horizontalHeader()
         v_header = table.verticalHeader()
-        h_header.setMinimumHeight(header_height)
-        v_header.setDefaultSectionSize(row_height)
-        v_header.setMinimumSectionSize(max(18, row_height // 2))
 
         header_font = h_header.font()
         header_font.setFamily(_master_font())
-        header_font.setPointSize(max(_ukuran_font_minimum(), int(size_base)))
+        header_font.setPointSize(size_base)
         header_font.setBold(True)
         h_header.setFont(header_font)
         v_header.setFont(header_font)
+
+        header_text_height = max(1, int(h_header.fontMetrics().height()))
+        header_height = _int_aman(
+            max(
+                base_header_height,
+                header_text_height + (header_padding_v * 2) + 8,
+            ),
+            default=base_header_height,
+            minimum=26,
+            maximum=10_000,
+        )
+
+        # Lepaskan batas maksimum lama jika header sebelumnya memakai
+        # setFixedHeight(), agar tinggi dapat mengikuti zoom.
+        if h_header.maximumHeight() < header_height:
+            h_header.setMaximumHeight(QT_GEOMETRY_MAX)
+
+        h_header.setMinimumHeight(header_height)
+
+        # DefaultSectionSize berlaku juga untuk baris baru setelah tabel
+        # di-refresh. MinimumSectionSize mencegah baris menyusut kembali.
+        v_header.setMinimumSectionSize(row_height)
+        v_header.setDefaultSectionSize(row_height)
+
+        # Simpan untuk modul yang ingin menyelaraskan tinggi setelah refresh.
+        table._zoom_current_row_height = row_height
+        table._zoom_current_header_height = header_height
 
         _skalakan_kolom_tableview(table, zoom)
         model = table.model()
@@ -454,7 +641,7 @@ def terapkan_zoom_tabel(
         header.setMinimumHeight(header_height)
         header_font = header.font()
         header_font.setFamily(_master_font())
-        header_font.setPointSize(max(_ukuran_font_minimum(), int(size_base)))
+        header_font.setPointSize(size_base)
         header_font.setBold(True)
         header.setFont(header_font)
         _skalakan_kolom_treeview(table, zoom)
@@ -468,7 +655,6 @@ def terapkan_zoom_tabel(
                 _skalakan(dasar.height(), zoom, minimum=20),
             ))
 
-    _terapkan_scrollbar(table, zoom)
 
 
 def _terapkan_zoom_layout(layout: Optional[QLayout], z: int) -> None:

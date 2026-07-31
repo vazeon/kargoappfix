@@ -145,6 +145,8 @@ def init_db(db_name: str = DEFAULT_DB_NAME) -> str:
                     tanggal DATE,
                     no_polisi TEXT,
                     nama_sopir TEXT,
+                    nama_kapal TEXT,
+                    note_manifest TEXT,
                     status_manifest TEXT,
                     is_synced INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -154,6 +156,19 @@ def init_db(db_name: str = DEFAULT_DB_NAME) -> str:
                 )
                 """
             )
+
+            # Migrasi database lama: CREATE TABLE IF NOT EXISTS tidak menambah
+            # kolom baru pada tabel yang sudah tersedia.
+            kolom_manifest = {
+                str(row[1])
+                for row in cursor.execute(
+                    "PRAGMA table_info(manifest)"
+                ).fetchall()
+            }
+            if "note_manifest" not in kolom_manifest:
+                cursor.execute(
+                    "ALTER TABLE manifest ADD COLUMN note_manifest TEXT"
+                )
 
             # 7. Invoice header
             cursor.execute(
@@ -235,18 +250,25 @@ def init_db(db_name: str = DEFAULT_DB_NAME) -> str:
             )
 
             # 11. Truk
+            # Data truk dipisahkan berdasarkan cabang aktif.
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS truk (
+                    kode_cabang TEXT NOT NULL,
                     jenis_truk TEXT NOT NULL,
-                    no_polisi TEXT PRIMARY KEY,
+                    no_polisi TEXT NOT NULL,
                     nama_sopir TEXT,
                     hp_sopir TEXT,
                     ket_truk TEXT,
                     foto_truk TEXT,
                     is_synced INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (kode_cabang, no_polisi),
+                    FOREIGN KEY (kode_cabang)
+                        REFERENCES data_cabang (kode_cabang)
+                        ON UPDATE CASCADE
+                        ON DELETE RESTRICT
                 )
                 """
             )

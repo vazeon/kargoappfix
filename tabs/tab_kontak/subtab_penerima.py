@@ -17,6 +17,7 @@ from themes.modules.kontak_armada import get_kontak_riwayat_styles, get_penerima
 from utils.number_formatters import format_ke_rupiah
 from utils.typography import MASTER_FONT, get_global_font_sizes
 from utils.widget_helpers import paksa_kapital_lineedit as helper_paksa_kapital_lineedit
+from utils.placeholder_helper import terap_semua_placeholder_dinamis
 from utils.mixins import ZoomTableMixin
 from utils.table_helper import buat_tabel_item
 from utils.date_ind_format import format_tanggal_ke_ui
@@ -58,6 +59,8 @@ class SubTabPenerima(QWidget, ZoomTableMixin):
         # PANEL KIRI: DATA UTAMA
         # ========================================================
         self.panel_kiri = QWidget()
+        self.panel_kiri.setMinimumWidth(400)
+        self.panel_kiri.setMaximumWidth(1400)
         layout_kiri = QVBoxLayout(self.panel_kiri)
         layout_kiri.setContentsMargins(0, 0, 5, 0)
         layout_kiri.setSpacing(10)
@@ -103,7 +106,7 @@ class SubTabPenerima(QWidget, ZoomTableMixin):
         header = self.tabel_penerima.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setSectionsClickable(True)
-        header.setSectionsMovable(True)
+        header.setSectionsMovable(False)
 
         self.load_lebar_kolom(self.tabel_penerima)
 
@@ -116,6 +119,8 @@ class SubTabPenerima(QWidget, ZoomTableMixin):
         # PANEL KANAN: HISTORI TRANSAKSI
         # ========================================================
         self.panel_kanan = QFrame()
+        self.panel_kanan.setMinimumWidth(400)
+        self.panel_kanan.setMaximumWidth(1400)
         self.panel_kanan.setObjectName("panelHistori")
 
         layout_kanan = QVBoxLayout(self.panel_kanan)
@@ -146,7 +151,7 @@ class SubTabPenerima(QWidget, ZoomTableMixin):
         header_kanan = self.tabel_histori.horizontalHeader()
         header_kanan.setSectionResizeMode(QHeaderView.Interactive)
         header_kanan.setSectionsClickable(True)
-        header_kanan.setSectionsMovable(True)
+        header_kanan.setSectionsMovable(False)
 
         self.load_lebar_kolom_histori(self.tabel_histori)
 
@@ -157,6 +162,9 @@ class SubTabPenerima(QWidget, ZoomTableMixin):
 
         self.splitter.addWidget(self.panel_kiri)
         self.splitter.addWidget(self.panel_kanan)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
         self.splitter.setSizes([650, 450])
 
         self.refresh_session_ui()
@@ -196,6 +204,17 @@ class SubTabPenerima(QWidget, ZoomTableMixin):
         super().showEvent(event)
 
         self.refresh_session_ui()
+
+        win = self.window()
+        is_dark = bool(
+            win
+            and hasattr(win, "current_theme")
+            and win.current_theme == "dark"
+        )
+        terap_semua_placeholder_dinamis(
+            self,
+            is_dark=is_dark,
+        )
         # Tema dikelola oleh TabKontak.
 
     # ============================================================
@@ -496,3 +515,9 @@ class SubTabPenerima(QWidget, ZoomTableMixin):
         self.panel_kanan.layout().setContentsMargins(10, 10, 10, 10)
         self.panel_kanan.layout().setSpacing(10)
 
+        # Placeholder miring hanya ketika input kosong.
+        # Saat pengguna mulai mengetik, font kembali normal.
+        terap_semua_placeholder_dinamis(
+            self,
+            is_dark=is_dark,
+        )
